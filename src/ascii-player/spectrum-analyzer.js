@@ -20,6 +20,10 @@ const cfg = require("./config");
 
 const log = createLogger("spectrum");
 
+function clamp01(value) {
+  return Math.max(0, Math.min(1, value));
+}
+
 class SpectrumAnalyzer extends EventEmitter {
   /**
    * @param {string} audioFile  — Ruta al archivo de audio
@@ -149,19 +153,24 @@ class SpectrumAnalyzer extends EventEmitter {
     }
     const rawBands = this._groupIntoBands(magnitudes, this._bandMap);
 
-    // 5. Convertir a dB, normalizar a [0, 1], y aplicar bass boost controlado
+    // 5. Convertir a dB, normalizar a [0, 1], con bass boost SOLO en bandas graves
     const normalizedBands = rawBands.map((val, i) => {
       if (val <= 0) return 0;
       const db = 20 * Math.log10(val);
-      let normalized = (db - cfg.MIN_DB) / (cfg.MAX_DB - cfg.MIN_DB);
+      let value = (db - cfg.MIN_DB) / (cfg.MAX_DB - cfg.MIN_DB);
+      value = clamp01(value);
 
-      // Bass boost controlado (primeras 30% de bandas)
+      value = Math.pow(value, cfg.BASS_POWER || 1);
+
+      const bandRatio = numBands > 1 ? i / (numBands - 1) : 0;
+      value *= 1 + bandRatio * (cfg.HIGH_BAND_BOOST || 0);
+
+      // Bass boost: SOLO primeras 30% de bandas (no todas)
       if (i < numBands * 0.3) {
-        normalized *= cfg.BASS_BOOST;
+        value *= cfg.BASS_BOOST;
       }
 
-      // Clamp seguro [0, 1]
-      return Math.max(0, Math.min(1, normalized));
+      return clamp01(value);
     });
 
     // 6. Suavizado + Decay + Anti-spike
@@ -239,8 +248,11 @@ class SpectrumAnalyzer extends EventEmitter {
   }
 
   /**
-   * Aplica EMA + decay + anti-spike limiter.
-   * Anti-spike: ninguna banda puede subir más de MAX_DELTA por frame.
+   * Aplica suavizado directo + anti-spike.
+   * SIN doble amortiguamiento — física directa para movimiento fluido.
+   *
+   * Subida: salto limitado por MAX_DELTA, escalado por ATTACK_RATE
+   * Bajada: EMA puro (SMOOTHING) con floor lineal (DECAY_RATE)
    */
   _applySmoothing(current, numBands) {
     if (!this.prevBands || this.prevBands.length !== numBands) {
@@ -248,28 +260,24 @@ class SpectrumAnalyzer extends EventEmitter {
     }
 
     const result = new Float64Array(numBands);
+    const decayStep = cfg.DECAY_RATE / cfg.MAX_HEIGHT;
 
     for (let i = 0; i < numBands; i++) {
       const prev = this.prevBands[i];
-      let curr = current[i];
+      const curr = current[i];
 
       if (curr > prev) {
-        // Subida con attack + anti-spike limiter
-        let target = prev + (curr - prev) * cfg.ATTACK_RATE;
-        let delta = target - prev;
-        if (delta > cfg.MAX_DELTA) {
-          target = prev + cfg.MAX_DELTA;
-        }
-        result[i] = target;
+        // ── Subida: directa, anti-spike limitada ──────────
+        const delta = Math.min(curr - prev, cfg.MAX_DELTA);
+        result[i] = prev + delta * cfg.ATTACK_RATE;
       } else {
-        // Bajada suave (EMA + decay)
+        // ── Bajada: EMA suave con floor lineal ────────────
         const smoothed = cfg.SMOOTHING * prev + (1 - cfg.SMOOTHING) * curr;
-        const decayed = prev - cfg.DECAY_RATE / cfg.MAX_HEIGHT;
-        result[i] = Math.max(0, Math.max(smoothed, decayed));
+        const decayed = prev - decayStep;
+        result[i] = Math.max(0, Math.min(smoothed, decayed));
       }
 
-      // Clamp seguro final
-      result[i] = Math.max(0, Math.min(1, result[i]));
+      result[i] = clamp01(result[i]);
       this.prevBands[i] = result[i];
     }
 
@@ -285,14 +293,17 @@ class SpectrumAnalyzer extends EventEmitter {
       this.peakHold = new Int32Array(numBands);
     }
 
+    const peakDecayStep = cfg.PEAK_DECAY_RATE / cfg.MAX_HEIGHT;
+
     for (let i = 0; i < numBands; i++) {
-      if (bands[i] >= this.peakBands[i]) {
-        this.peakBands[i] = Math.min(1, bands[i]);
+      const current = bands[i];
+      if (current >= this.peakBands[i]) {
+        this.peakBands[i] = current;
         this.peakHold[i] = cfg.PEAK_HOLD_FRAMES;
       } else if (this.peakHold[i] > 0) {
         this.peakHold[i]--;
       } else {
-        this.peakBands[i] = Math.max(0, this.peakBands[i] - cfg.PEAK_DECAY_RATE / cfg.MAX_HEIGHT);
+        this.peakBands[i] = Math.max(current, this.peakBands[i] - peakDecayStep);
       }
     }
   }

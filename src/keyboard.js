@@ -92,7 +92,7 @@ function setupKeyboard(handlers) {
     if (process.stdin.isTTY) {
       try { process.stdin.setRawMode(false); } catch {}
     }
-    process.stdin.pause();
+    // NO pausar stdin aquí — inquirer necesita que siga activo para las flechas del menú
     process.stdout.write("\x1b[?25h"); // restaurar cursor
   };
 }

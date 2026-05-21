@@ -10,7 +10,7 @@
  *   ffmpeg  → decodifica PCM → SpectrumAnalyzer (FFT) → BeatDetector
  *   spectrum event → throttled render (máx FPS) → 1 write atómico
  *
- * Protecciones anti-crash:
+ * Protecciones de render:
  *   - Render event-driven (no polling)
  *   - Frame throttle (máx FPS)
  *   - Backpressure (skip si render en curso)
