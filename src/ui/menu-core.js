@@ -71,7 +71,7 @@ async function songListMenu(folderPath) {
     ui.actionChoice("Procesar pendientes", `${pending} pendiente(s)`, "__batch__", pending ? "info" : "muted"),
     ui.actionChoice("Cambiar carpeta musical", "Seleccionar otro directorio", "__folder__", "info"),
     ui.separator(),
-    ui.actionChoice("Salir de LyricSync", "Cerrar esta sesion de terminal", "__exit__", "danger"),
+    ui.actionChoice("Salir de Titofy CMD", "Cerrar esta sesion de terminal", "__exit__", "danger"),
   ];
 
   const selected = await customList(
@@ -108,7 +108,7 @@ async function startMenuLoop() {
 
     if (result === null) {
       exitAltScreen();
-      console.log("\n  👋 LyricSync cerrado.\n");
+      console.log("\n  👋 Titofy CMD cerrado.\n");
       process.exit(0);
     }
 

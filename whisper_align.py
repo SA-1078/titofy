@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-whisper_align.py — LyricSync
+whisper_align.py — Titofy CMD
 Forced Alignment: sincroniza una letra existente con el audio.
 
 Mucho más rápido que transcribir desde cero porque el modelo ya
@@ -25,7 +25,7 @@ import shutil
 
 from logger import get_logger
 from lyric_config import get_config
-from whisper_transcribe import detect_device, is_model_downloaded
+from whisper_transcribe import detect_device, is_model_downloaded, print_yellow, validate_audio_file
 
 log = get_logger("align")
 
@@ -70,15 +70,13 @@ def align_lyrics(
     print()
     print(f"  💿 Archivo  : {basename}")
 
-    if not os.path.exists(audio_path):
-        log.error(f"No se encontró el archivo: {audio_path}")
-        print(f"\n  ❌ No se encontró el archivo: {audio_path}", file=sys.stderr)
-        sys.exit(1)
-
+    duration = validate_audio_file(audio_path)
     size_mb = os.path.getsize(audio_path) / (1024 * 1024)
     line_count = len([l for l in lyrics_text.strip().split("\n") if l.strip()])
 
     print(f"  📦 Tamaño   : {size_mb:.2f} MB")
+    if duration:
+        print(f"  ⏱️ Duracion : {duration:.2f} s")
     print(f"  🤖 Modelo   : {model_name} (alineación)")
     print(f"  🌐 Idioma   : {language}")
     print(f"  📝 Líneas   : {line_count} líneas de letra")
@@ -91,7 +89,7 @@ def align_lyrics(
     if device == "cuda":
         print(f"  🚀 GPU       : {device_name}")
     else:
-        print(f"  💻 Dispositivo: CPU")
+        print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
 
     log.info(f"Cargando modelo '{model_name}' en {device} para alineación...")
     print(f"  ⏳ Cargando modelo '{model_name}' en {device.upper()}...")
@@ -129,7 +127,7 @@ def align_lyrics(
     title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
-        f"[by:LyricSync — Forced Alignment ({model_name}) | lang:{language}]",
+        f"[by:Titofy CMD — Forced Alignment ({model_name}) | lang:{language}]",
         "",
     ]
 
@@ -166,7 +164,7 @@ def align_lyrics(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="LyricSync — Forced Alignment: sincronizar letra existente con audio",
+        description="Titofy CMD — Forced Alignment: sincronizar letra existente con audio",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("audio", help="Ruta al archivo de audio (.mp3, .wav, .m4a, etc.)")

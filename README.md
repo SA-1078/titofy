@@ -1,13 +1,20 @@
-# 🎵 LyricSync v2.0 — Motor de Alineación Audio-Texto Offline
+# 🎵 Titofy CMD v1.3 — Motor de Generación de Letras Sincronizadas Offline
 
-Software **100% local y offline** que genera letras de canciones sincronizadas automáticamente usando IA (ecosistema Whisper avanzado) y las reproduce en la terminal al ritmo de la música. Incluye API local, forced alignment, procesamiento batch paralelo, y evaluación de calidad. Todo se procesa en tu propio ordenador: *Nada se sube a internet.*
+Software **100% local y offline** que genera letras de canciones sincronizadas automáticamente usando IA (ecosistema Whisper avanzado) y las reproduce en la terminal al ritmo de la música. Incluye API local, forced alignment y procesamiento batch paralelo. Todo se procesa en tu propio ordenador: *Nada se sube a internet.*
+
+### ✨ Novedades de la v1.3
+- **Renombramiento General**: Consolidación total del ecosistema bajo el nombre **Titofy CMD** (ex LyricSync).
+- **Cabecera Renovada**: Nuevo logotipo ASCII en bloques en 3D que deletrea "TITOFY CMD" centrado en terminales de gran tamaño.
+- **Scroll Continuo Suave (Cross-fade Scroll)**: Efecto dinámico de desplazamiento vertical que previene saltos de texto abruptos intercambiando las letras a mitad de la transición (`t = 0.5`).
+- **Resaltado Spotify-Style**: Iluminación progresiva de letras letra a letra (`renderProgressLine`) integrada en el reproductor simple y visualizador ASCII a 20 FPS (50ms).
+- **Opacidades Homogéneas**: Slots de letras anteriores y posteriores con un tono gris oscuro unificado (`rgb(95, 95, 95)`) y letra actual en verde neón brillante (`rgb(57, 255, 20)`).
 
 ---
 
 ## 📁 Estructura del Proyecto
 
 ```
-lyric-sync/
+titofy_cmd/
 ├── index.js                  → Punto de entrada unificado
 ├── generate-lrc.js           → Orquestador CLI (Node.js → Python)
 ├── whisper_transcribe.py     → Motor IA de transcripción (offline)
@@ -58,8 +65,8 @@ lyric-sync/
 
 ```bash
 cd "C:\Users\TuUsuario\Documents"
-git clone <tu-repo> lyric-sync
-cd lyric-sync
+git clone <tu-repo> titofy-cmd
+cd titofy-cmd
 ```
 
 ### 2. Instalar dependencias de Node.js

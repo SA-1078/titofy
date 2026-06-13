@@ -1,5 +1,5 @@
 """
-logger.py — LyricSync
+logger.py — Titofy CMD
 Sistema de logging profesional con niveles y salida a archivo.
 
 Uso:
@@ -47,7 +47,7 @@ def get_logger(name: str, level: str = None, to_file: bool = None, log_dir: str 
         to_file: Si guardar en archivo. Si None, lee de config.
         log_dir: Directorio de logs. Si None, lee de config.
     """
-    logger = logging.getLogger(f"lyric-sync.{name}")
+    logger = logging.getLogger(f"titofy-cmd.{name}")
 
     # Evitar re-configurar si ya fue configurado
     if name in _configured_loggers:

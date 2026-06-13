@@ -1,4 +1,4 @@
-# LyricSync - Dependencias de Python
+# Titofy CMD - Dependencias de Python
 # Instalar con: python -m pip install -r requirements.txt
 #
 # Nota:

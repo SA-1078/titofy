@@ -1,5 +1,5 @@
-"""
-lyrics_postprocess.py — LyricSync
+"""
+lyrics_postprocess.py — Titofy CMD
 Post-procesador inteligente de transcripciones de Whisper.
 
 Corrige problemas comunes:
@@ -24,7 +24,6 @@ Uso como módulo:
 import re
 from rapidfuzz import fuzz
 
-
 # ──────────────────────────────────────────────────────────────────────────────
 # Patrones de alucinación conocidos de Whisper
 # ──────────────────────────────────────────────────────────────────────────────
@@ -38,9 +37,20 @@ HALLUCINATION_PATTERNS = [
     r"^subscribe",
     r"^subtítulos? (por|de|realizados)",
     r"^subtitulado por",
+    r"^subtitles? (by|created by)",
+    r"^captions? (by|created by)",
+    r"^transcri(pc|p)ci[oó]n por",
+    r"^transcribed by",
+    r"^traducci[oó]n por",
+    r"^translated by",
     r"^copyright",
+    r"^todos los derechos reservados",
+    r"^all rights reserved",
     r"^www\.",
     r"^http",
+    r"^visita nuestro canal",
+    r"^s[ií]guenos en",
+    r"^follow us on",
     r"^\.{2,}$",                      # solo puntos "..."
     r"^\*+$",                          # solo asteriscos
     r"^-+$",                           # solo guiones
@@ -389,22 +399,35 @@ def check_timing(segments: list) -> list:
     cleaned = []
     prev_end = 0.0
 
-    for seg in segments:
+    for seg in sorted(segments, key=lambda item: item.get("start", 0)):
         start = seg.get("start", 0)
         end = seg.get("end", start)
         duration = end - start
+        text = seg.get("text", "")
 
         # Segmento con duración > 30s y poco texto → sospechoso
-        word_count = len(seg["text"].split())
+        word_count = len(text.split())
         if duration > 30 and word_count < 5:
             continue
 
         # Start negativo
-        if start < 0:
+        if start < 0 or end < 0:
             continue
 
+        # Duración imposible o nula
+        if end <= start:
+            continue
+
+        # Solape significativo: si queda completamente dentro del anterior,
+        # descartarlo; si solo se pisa un poco, empujar el inicio.
+        if cleaned and start < prev_end - 0.25:
+            if end <= prev_end:
+                continue
+            seg = dict(seg)
+            seg["start"] = prev_end + 0.01
+
         cleaned.append(seg)
-        prev_end = end
+        prev_end = max(prev_end, seg.get("end", end))
 
     return cleaned
 
@@ -599,14 +622,14 @@ if __name__ == "__main__":
     import argparse
     import os
 
-    parser = argparse.ArgumentParser(description="LyricSync — Limpiador de transcripciones")
+    parser = argparse.ArgumentParser(description="Titofy CMD — Limpiador de transcripciones")
     parser.add_argument("input", help="Archivo .lrc a limpiar")
     parser.add_argument("--output", "-o", default=None, help="Archivo de salida (default: sobreescribe)")
     parser.add_argument("--threshold", "-t", type=int, default=85,
                         help="Umbral de similitud 0-100 para detectar duplicados (default: 85)")
     args = parser.parse_args()
 
-    print(f"\n🧹 LyricSync — Limpiador de letras")
+    print(f"\n🧹 Titofy CMD — Limpiador de letras")
     print(f"{'─' * 45}")
     print(f"📄 Entrada: {args.input}")
 
@@ -619,7 +642,7 @@ if __name__ == "__main__":
 
     output = args.output or args.input
     title = os.path.splitext(os.path.basename(args.input))[0]
-    lrc_content = segments_to_lrc(clean, title, "LyricSync — post-procesado")
+    lrc_content = segments_to_lrc(clean, title, "Titofy CMD — post-procesado")
 
     with open(output, "w", encoding="utf-8") as f:
         f.write(lrc_content)

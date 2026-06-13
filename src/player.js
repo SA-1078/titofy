@@ -296,7 +296,7 @@ function startPlayer(audioFile, lrcFile, systemEnv) {
       onVolDown: () => changeVolume(-10),
     });
 
-    // Render loop (cada 250ms actualiza la barra de progreso y letras)
+    // Render loop (cada 50ms actualiza la barra de progreso y letras para animación suave a 20 FPS)
     doRender();
     renderInterval = setInterval(() => {
       if (state.exiting || isResizing) return; // BLOQUEO visual durante la tormenta de resize
@@ -308,7 +308,7 @@ function startPlayer(audioFile, lrcFile, systemEnv) {
         state.playing = false;
         doRender();
       }
-    }, 250);
+    }, 50);
 
     // Señales del sistema: para no depender del menú, interceptamos para el player
     const sigintHandler = () => exit();

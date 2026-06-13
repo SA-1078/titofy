@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-api_server.py — LyricSync
+api_server.py — Titofy CMD
 Microservicio local FastAPI que expone el motor Whisper como endpoints HTTP.
 
 Uso:
@@ -39,7 +39,7 @@ cfg = get_config()
 # ──────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="LyricSync API",
+    title="Titofy CMD API",
     description="Motor de transcripción y sincronización de letras offline",
     version="1.0.0",
 )
@@ -252,7 +252,7 @@ async def postprocess(req: PostprocessRequest):
     output = req.output_path or req.lrc_path
 
     title = os.path.splitext(os.path.basename(req.lrc_path))[0]
-    lrc_content = segments_to_lrc(clean, title, "LyricSync — post-procesado vía API")
+    lrc_content = segments_to_lrc(clean, title, "Titofy CMD — post-procesado vía API")
 
     with open(output, "w", encoding="utf-8") as f:
         f.write(lrc_content)
@@ -309,7 +309,7 @@ if __name__ == "__main__":
 
     print()
     print("  ╭──────────────────────────────────────────────────╮")
-    print("  │  🚀 LyricSync API — Servidor Local              │")
+    print("  │  🚀 Titofy CMD API — Servidor Local              │")
     print("  ╰──────────────────────────────────────────────────╯")
     print(f"  🌐 URL: http://{host}:{port}")
     print(f"  📋 Docs: http://{host}:{port}/docs")

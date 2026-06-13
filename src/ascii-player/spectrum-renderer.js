@@ -320,67 +320,88 @@ function renderSpectrum(state) {
   // 5 slots fijos para letras — transiciones tipo Spotify
   const lyricSlots = ["", "", "", "", ""];
   if (lineIdx >= 0) {
-    // Curva easeOut para transiciones suaves (rápido al inicio, suave al final)
     const easeOut = easeOutCubic;
-
-    // Tiempo desde que cambió la línea actual
+    // Transición dura lo configurado o 600ms
+    const transitionDuration = cfg.LYRIC_TRANSITION_MS || 600;
     const transition = lineChangeTimeMs
-      ? easeOut((nowMs - lineChangeTimeMs) / (cfg.LYRIC_TRANSITION_MS || 650))
+      ? easeOut((nowMs - lineChangeTimeMs) / transitionDuration)
       : 1;
+
     const inLineTransition = fromLineIdx >= 0 && fromLineIdx !== lineIdx && transition < 1;
     const maxLyricWidth = innerWidth - 8;
-    const timeSinceChange = transition;
 
-    // ── Slot 0: línea -2 (muy tenue, casi invisible) ──────
-    if (lineIdx > 1) {
-      lyricSlots[0] = chalk.rgb(75, 75, 75)(`      ${truncate(lyrics[lineIdx - 2].text, innerWidth - 8)}`);
-    }
+    const isFirstHalf = inLineTransition && transition < 0.5;
+    const baseIdx = isFirstHalf ? lineIdx - 1 : lineIdx;
 
-    // ── Slot 1: línea anterior (fade-out suave 1.2s) ──────
-    if (lineIdx > 0) {
-      const fadeOutT = easeOut(timeSinceChange / 1.2);
-      // De blanco cálido → gris oscuro
-      const shade = Math.round(185 - 95 * fadeOutT); // 185 → 90
-      lyricSlots[1] = chalk.rgb(shade, shade, Math.round(shade * 0.9))(`      ${truncate(lyrics[lineIdx - 1].text, innerWidth - 8)}`);
-    }
+    const texts = [
+      (baseIdx > 1) ? lyrics[baseIdx - 2].text : "",
+      (baseIdx > 0) ? lyrics[baseIdx - 1].text : "",
+      lyrics[baseIdx].text,
+      (baseIdx < lyrics.length - 1) ? lyrics[baseIdx + 1].text : "",
+      (baseIdx < lyrics.length - 2) ? lyrics[baseIdx + 2].text : "",
+    ];
 
-    // ── Slot 2: línea ACTUAL (fade-in 0.8s con acento Spotify) ──
-    const fadeIn = easeOut(timeSinceChange / 0.8);
+    const activeColorBase = { r: 57, g: 255, b: 20 }; // Verde neón
+    const restColorBase = { r: 95, g: 95, b: 95 };     // Gris opaco
 
-    // Color Spotify: aparece en gris y se ilumina a verde-cyan brillante
-    // Al avanzar la línea, el color evoluciona de verde → cyan → blanco
-    const lineProgress = lyrics[lineIdx + 1]
-      ? clamp((elapsed - lyrics[lineIdx].time) / (lyrics[lineIdx + 1].time - lyrics[lineIdx].time))
-      : clamp((elapsed - lyrics[lineIdx].time) / 3);
+    const getProgressOf = (idx) => {
+      if (idx < 0 || idx >= lyrics.length) return 0;
+      const nextTime = lyrics[idx + 1] ? lyrics[idx + 1].time : lyrics[idx].time + 3;
+      const duration = nextTime - lyrics[idx].time;
+      return clamp((elapsed - lyrics[idx].time) / (duration || 1));
+    };
 
-    // Base: verde Spotify (#1DB954) → blanco cálido
-    const accentR = Math.round((80 + 175 * lineProgress) * fadeIn + 90 * (1 - fadeIn));
-    const accentG = Math.round((220 + 35 * lineProgress) * fadeIn + 90 * (1 - fadeIn));
-    const accentB = Math.round((100 + 100 * lineProgress) * fadeIn + 90 * (1 - fadeIn));
-    const activeColor = { r: accentR, g: accentG, b: accentB };
-    const restColor = { r: 105, g: 118, b: 112 };
-    const progressFill = inLineTransition
-      ? Math.max(0.08, lineProgress * transition)
-      : lineProgress;
-    lyricSlots[2] = renderProgressLine("  ♪   ", lyrics[lineIdx].text, maxLyricWidth, progressFill, activeColor, restColor);
+    if (inLineTransition) {
+      const factorActive = transition;
+      const factorOldActive = 1 - transition;
 
-    // ── Slot 3: siguiente línea (warmup 2.5s antes) ───────
-    if (lineIdx < lyrics.length - 1) {
-      const nextIn = lyrics[lineIdx + 1].time - elapsed;
-      const warmth = easeOut(clamp(1 - nextIn / 2.5));
-      // De casi invisible → gris claro preparándose
-      const nextR = Math.round(70 + 100 * warmth);
-      const nextG = Math.round(70 + 105 * warmth);
-      const nextB = Math.round(70 + 95 * warmth);
-      lyricSlots[3] = chalk.rgb(nextR, nextG, nextB)(`      ${truncate(lyrics[lineIdx + 1].text, innerWidth - 8)}`);
-    }
+      const colorNewActive = {
+        r: mix(restColorBase.r, activeColorBase.r, factorActive),
+        g: mix(restColorBase.g, activeColorBase.g, factorActive),
+        b: mix(restColorBase.b, activeColorBase.b, factorActive),
+      };
 
-    // ── Slot 4: línea +2 (apenas visible) ─────────────────
-    if (lineIdx < lyrics.length - 2) {
-      lyricSlots[4] = chalk.rgb(60, 60, 60)(`      ${truncate(lyrics[lineIdx + 2].text, innerWidth - 8)}`);
+      const colorOldActive = {
+        r: mix(restColorBase.r, activeColorBase.r, factorOldActive),
+        g: mix(restColorBase.g, activeColorBase.g, factorOldActive),
+        b: mix(restColorBase.b, activeColorBase.b, factorOldActive),
+      };
+
+      if (isFirstHalf) {
+        lyricSlots[0] = texts[0] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[0], maxLyricWidth)}`) : "";
+        lyricSlots[1] = texts[1] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[1], maxLyricWidth)}`) : "";
+
+        const prog2 = getProgressOf(lineIdx - 1);
+        lyricSlots[2] = renderProgressLine("  ♪   ", texts[2], maxLyricWidth, prog2, colorOldActive, restColorBase);
+
+        const prog3 = getProgressOf(lineIdx);
+        lyricSlots[3] = texts[3] ? renderProgressLine("      ", texts[3], maxLyricWidth, prog3, colorNewActive, restColorBase, false) : "";
+
+        lyricSlots[4] = texts[4] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[4], maxLyricWidth)}`) : "";
+      } else {
+        lyricSlots[0] = texts[0] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[0], maxLyricWidth)}`) : "";
+
+        const prog1 = getProgressOf(lineIdx - 1);
+        lyricSlots[1] = texts[1] ? renderProgressLine("      ", texts[1], maxLyricWidth, prog1, colorOldActive, restColorBase, false) : "";
+
+        const prog2 = getProgressOf(lineIdx);
+        lyricSlots[2] = renderProgressLine("  ♪   ", texts[2], maxLyricWidth, prog2, colorNewActive, restColorBase);
+
+        lyricSlots[3] = texts[3] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[3], maxLyricWidth)}`) : "";
+        lyricSlots[4] = texts[4] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[4], maxLyricWidth)}`) : "";
+      }
+    } else {
+      lyricSlots[0] = texts[0] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[0], maxLyricWidth)}`) : "";
+      lyricSlots[1] = texts[1] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[1], maxLyricWidth)}`) : "";
+
+      const prog2 = getProgressOf(lineIdx);
+      lyricSlots[2] = renderProgressLine("  ♪   ", texts[2], maxLyricWidth, prog2, activeColorBase, restColorBase);
+
+      lyricSlots[3] = texts[3] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[3], maxLyricWidth)}`) : "";
+      lyricSlots[4] = texts[4] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[4], maxLyricWidth)}`) : "";
     }
   } else {
-    lyricSlots[2] = chalk.gray.italic(`  ♪   Esperando que comience la letra...`);
+    lyricSlots[2] = chalk.rgb(95, 95, 95).italic(`  ♪   Esperando que comience la letra...`);
   }
   for (const slot of lyricSlots) lines.push(slot);
 

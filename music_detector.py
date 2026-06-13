@@ -1,5 +1,5 @@
 """
-music_detector.py — LyricSync
+music_detector.py — Titofy CMD
 Clasificador heurístico de secciones musicales.
 
 Convierte etiquetas genéricas "(música)" en etiquetas contextuales:

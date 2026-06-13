@@ -38,10 +38,19 @@ function clear() {
 function header(subtitle = "IA offline para letras sincronizadas") {
   clear();
   const w = width();
-  const title = chalk.bold.rgb(86, 200, 255)("LYRICSYNC");
-  const tag = chalk.gray(subtitle);
-  console.log(`${INDENT}${title} ${chalk.gray("·")} ${tag}`);
-  console.log(`${INDENT}${chalk.dim("─".repeat(w))}`);
+  const brand =
+    chalk.bold.rgb(255, 132, 31)("TITO") +
+    chalk.bold.rgb(255, 202, 58)("FY") +
+    chalk.bold.rgb(38, 198, 218)(" CMD");
+  const glow = chalk.rgb(255, 116, 24)(">>");
+  const tag = chalk.rgb(190, 198, 205)(subtitle);
+  const rule =
+    chalk.rgb(255, 132, 31)("=".repeat(Math.min(22, w))) +
+    chalk.rgb(255, 202, 58)("=".repeat(Math.max(0, Math.min(18, w - 22)))) +
+    chalk.rgb(38, 198, 218)("=".repeat(Math.max(0, w - 40)));
+
+  console.log(`${INDENT}${glow} ${brand} ${chalk.gray("·")} ${tag}`);
+  console.log(`${INDENT}${rule}`);
   console.log("");
 }
 

@@ -1,5 +1,5 @@
 """
-lyric_config.py — LyricSync
+lyric_config.py — Titofy CMD
 Cargador de configuración centralizada desde config.yaml.
 
 Uso:

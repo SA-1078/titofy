@@ -15,6 +15,7 @@
 const { spawn } = require("child_process");
 const path = require("path");
 const { createLogger } = require("./logger");
+const { resolvePython } = require("./python-resolver");
 
 const log = createLogger("batch");
 
@@ -106,6 +107,12 @@ class BatchProcessor {
   _runSingleTask(task, onProgressCallback = null) {
     return new Promise((resolve, reject) => {
       const scriptPath = path.join(__dirname, "..", "whisper_transcribe.py");
+      const pythonBin = resolvePython(this.systemEnv);
+
+      if (!pythonBin) {
+        reject(new Error("Python 3.11+ no disponible. Define PYTHON o instala Python en PATH."));
+        return;
+      }
 
       const args = [
         scriptPath,
@@ -115,7 +122,7 @@ class BatchProcessor {
         "--language", task.language,
       ].filter(Boolean);
 
-      const proc = spawn("python", args, {
+      const proc = spawn(pythonBin, args, {
         stdio: "pipe",
         env: this.systemEnv,
       });

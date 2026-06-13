@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-whisper_transcribe.py — LyricSync
+whisper_transcribe.py — Titofy CMD
 Transcribe un archivo de audio con Whisper local y genera un archivo .lrc.
 
 Uso:
@@ -19,8 +19,20 @@ import sys
 import os
 import re
 import argparse
+import subprocess
 import shutil
 import math
+
+ANSI_YELLOW = "\033[33m"
+ANSI_RESET = "\033[0m"
+
+
+def yellow(text: str) -> str:
+    return f"{ANSI_YELLOW}{text}{ANSI_RESET}"
+
+
+def print_yellow(text: str):
+    print(yellow(text))
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -34,9 +46,13 @@ def detect_device() -> tuple[str, str]:
       - ("cuda", "NVIDIA GeForce RTX 5070 Laptop GPU") si hay GPU
       - ("cpu", "CPU") si no hay GPU
     """
-    if torch.cuda.is_available():
-        name = torch.cuda.get_device_name(0)
-        return "cuda", name
+    try:
+        if torch.cuda.is_available():
+            name = torch.cuda.get_device_name(0)
+            return "cuda", name
+    except Exception as exc:
+        print_yellow(f"  ⚠️  CUDA no se pudo inicializar correctamente: {exc}")
+        print_yellow("     Se usara CPU para continuar sin detener el programa.")
     return "cpu", "CPU"
 
 
@@ -60,6 +76,68 @@ def is_model_downloaded(model_name: str) -> bool:
     expected_filename = url.split("/")[-1]
     model_path = os.path.join(download_root, expected_filename)
     return os.path.exists(model_path)
+
+
+def resolve_local_binary(binary_name: str) -> str | None:
+    """Busca ffmpeg/ffprobe en PATH y en bin/ del proyecto."""
+    exe_name = binary_name + (".exe" if os.name == "nt" else "")
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", exe_name)
+    if os.path.exists(bundled):
+        return bundled
+    return shutil.which(binary_name) or shutil.which(exe_name)
+
+
+def validate_audio_file(audio_path: str) -> float | None:
+    """Valida existencia, tamaño y lectura básica del audio antes de cargar Whisper."""
+    if not os.path.exists(audio_path):
+        log.error(f"No se encontro el archivo: {audio_path}")
+        print(f"\n  ❌ No se encontro el archivo: {audio_path}", file=sys.stderr)
+        print("     Verifica que la ruta sea correcta.\n", file=sys.stderr)
+        sys.exit(1)
+
+    size_bytes = os.path.getsize(audio_path)
+    if size_bytes <= 0:
+        log.error(f"Archivo de audio vacio: {audio_path}")
+        print(f"\n  ❌ El archivo de audio esta vacio: {audio_path}", file=sys.stderr)
+        sys.exit(1)
+
+    ffprobe = resolve_local_binary("ffprobe")
+    if not ffprobe:
+        print_yellow("  ⚠️  ffprobe no esta disponible; se omite la validacion profunda del audio.")
+        return None
+
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_path,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception as exc:
+        print_yellow(f"  ⚠️  No se pudo validar el audio con ffprobe: {exc}")
+        return None
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "sin detalle").strip()
+        log.error(f"ffprobe no pudo leer el audio: {detail}")
+        print(f"\n  ❌ ffprobe no pudo leer el archivo de audio.", file=sys.stderr)
+        print(f"     Detalle: {detail}\n", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError:
+        duration = 0.0
+
+    if duration <= 0:
+        log.error("Duracion de audio invalida o cero")
+        print("\n  ❌ El archivo de audio no tiene duracion valida.\n", file=sys.stderr)
+        sys.exit(1)
+
+    return duration
 
 from logger import get_logger
 from lyric_config import get_config
@@ -257,14 +335,11 @@ def generate_lrc(
     print()
     print(f"  💿 Archivo  : {basename}")
 
-    if not os.path.exists(audio_path):
-        log.error(f"No se encontró el archivo: {audio_path}")
-        print(f"\n  ❌ No se encontró el archivo: {audio_path}", file=sys.stderr)
-        print(f"     Verifica que la ruta sea correcta.\n", file=sys.stderr)
-        sys.exit(1)
-
+    duration = validate_audio_file(audio_path)
     size_mb = os.path.getsize(audio_path) / (1024 * 1024)
     print(f"  📦 Tamaño   : {size_mb:.2f} MB")
+    if duration:
+        print(f"  ⏱️ Duracion : {duration:.2f} s")
     print(f"  🤖 Modelo   : {model_name}")
     print(f"  🌐 Idioma   : {lang_display}")
     print(f"  📂 Salida   : lrc/{lrc_name}")
@@ -280,8 +355,8 @@ def generate_lrc(
         print(f"  🚀 GPU       : {device_name} ({vram_mb} MB VRAM)")
         print(f"  ⚡ Precisión  : FP16 (aceleración GPU)")
     else:
-        print(f"  💻 Dispositivo: CPU (sin GPU detectada)")
-        print(f"  ⚠️  Tip: instala PyTorch con CUDA para acelerar 5-10x")
+        print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
+        print_yellow("     Tip: instala PyTorch con CUDA para acelerar 5-10x.")
 
     log.info(f"Iniciando transcripción: {basename} [modelo={model_name}, lang={lang_display}, device={device}]")
     print(f"  ⏳ Cargando modelo '{model_name}' en {device.upper()}...")
@@ -377,7 +452,7 @@ def generate_lrc(
     title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
-        f"[by:LyricSync — Whisper {model_name} | lang:{detected_lang}]",
+        f"[by:Titofy CMD — Whisper {model_name} | lang:{detected_lang}]",
         "",
     ]
 
@@ -457,7 +532,7 @@ def generate_lrc(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="LyricSync — Generador LRC con Whisper local (offline)",
+        description="Titofy CMD — Generador LRC con Whisper local (offline)",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("audio", help="Ruta al archivo de audio (.mp3, .wav, .m4a, .mp4, etc.)")

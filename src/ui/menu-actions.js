@@ -17,6 +17,7 @@ const { startPlayer } = require("../player");
 const { startAsciiPlayer } = require("../ascii-player");
 const { LyricSyncAPI } = require("../api-client");
 const { BatchProcessor } = require("../batch-worker");
+const { resolvePython } = require("../python-resolver");
 
 function pause(message = "Presiona Enter para volver") {
   return prompt([{
@@ -122,10 +123,16 @@ async function generateLrc(audioPath, model = "small", language = "es") {
   }
 
   const scriptPath = path.join(__dirname, "..", "..", "whisper_transcribe.py");
+  const pythonBin = resolvePython(SYSTEM_ENV);
+
+  if (!pythonBin) {
+    ui.notice("Python no disponible", "Instala Python 3.11+ o define la variable PYTHON con la ruta al ejecutable.", "danger");
+    return false;
+  }
 
   return new Promise((resolve) => {
     const proc = spawn(
-      "python",
+      pythonBin,
       [scriptPath, audioPath, "--output", lrcPath, "--model", model, "--language", language],
       { stdio: "inherit", env: SYSTEM_ENV }
     );
@@ -210,10 +217,17 @@ async function alignLyrics(audioPath) {
   const scriptPath = path.join(__dirname, "..", "..", "whisper_align.py");
   const tempTxt = path.join(__dirname, "..", "..", "_temp_lyrics.txt");
   fs.writeFileSync(tempTxt, lyricsText, "utf-8");
+  const pythonBin = resolvePython(SYSTEM_ENV);
+
+  if (!pythonBin) {
+    try { fs.unlinkSync(tempTxt); } catch { }
+    ui.notice("Python no disponible", "Instala Python 3.11+ o define la variable PYTHON con la ruta al ejecutable.", "danger");
+    return false;
+  }
 
   return new Promise((resolve) => {
     const proc = spawn(
-      "python",
+      pythonBin,
       [scriptPath, audioPath, "--lyrics", tempTxt, "--output", lrcPath, "--language", "es"],
       { stdio: "inherit", env: SYSTEM_ENV }
     );

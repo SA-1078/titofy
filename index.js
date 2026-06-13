@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * index.js — Entrada Unificada de LyricSync
+ * index.js — Entrada Unificada de Titofy CMD
  *
  * Administra todo el reproductor usando módulos asíncronos limpios en el mismo proceso.
  * Evita la sobre-multiplicación de procesos y colisiones de terminal.
@@ -45,7 +45,7 @@ if (audioArgIdx !== -1 && lrcArgIdx !== -1) {
 
   startMenuLoop().catch((err) => {
     if (err.isTtyError || err.message?.includes("force closed")) {
-      console.log("\n\n  👋 LyricSync cerrado.\n");
+      console.log("\n\n  👋 Titofy CMD cerrado.\n");
       process.exit(0);
     }
     console.error(`\nError: ${err.message}`);
