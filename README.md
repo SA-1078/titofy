@@ -172,19 +172,28 @@ python whisper_align.py audio.mp3 --lyrics letra.txt --language es
 
 > 💥 **Nivel Spotify lyrics sync**: si ya tienes la letra, esto produce sincronización perfecta.
 
-### Opción 4: API local (para integraciones)
+### Opción 4: API Local (Microservicio HTTP para integraciones)
+
+Este proyecto cuenta con un servidor API local basado en **FastAPI** que actúa como puente para otras aplicaciones.
+
+**¿Para qué sirve?**
+Al ejecutar `npm run api`, se inicia un microservicio web local de alto rendimiento. Esto permite que **cualquier otra aplicación** (ya sea tu futura aplicación web de la **Fase 2**, una app móvil de la **Fase 3**, o scripts automáticos en otros lenguajes) consuma las capacidades de transcripción con Whisper, alineamiento de letras y limpieza inteligente enviando simples peticiones HTTP locales.
 
 ```bash
+# Iniciar el servidor API local
 npm run api
-# API disponible en http://127.0.0.1:8642/docs
+
+# Documentación interactiva de la API disponible automáticamente en:
+# http://127.0.0.1:8642/docs
 ```
 
-Endpoints:
-- `POST /transcribe` — Transcribir audio
-- `POST /align` — Forced alignment
-- `POST /postprocess` — Limpiar .lrc existente
-- `GET /status/{id}` — Estado de tarea
-- `GET /health` — Salud del servidor
+**Principales Endpoints Disponibles:**
+- `POST /transcribe` — Transcribir y sincronizar un archivo de audio local desde cero.
+- `POST /align` — Realizar alineamiento maestro (Forced Alignment) entre un audio y un texto plano con la letra de la canción.
+- `POST /postprocess` — Limpiar y eliminar alucinaciones de un archivo `.lrc` ya generado.
+- `GET /status/{id}` — Consultar el progreso de las tareas asíncronas de transcripción.
+- `GET /health` — Comprobación de estado general del servidor y detección de hardware (CPU/GPU).
+
 
 ### Opción 5: Limpiar un .lrc existente (post-procesador standalone)
 
@@ -247,23 +256,35 @@ Puedes crear archivos `.lrc` manualmente con este formato:
 
 ---
 
-## 🌐 Roadmap
+## 🌐 Ruta de Desarrollo (Roadmap)
 
-- [x] **Fase 1** — Letras sincronizadas en terminal
-  - [x] Transcripción offline con Whisper local
-  - [x] Menú interactivo con selección de canciones
-  - [x] Procesamiento en lote
-  - [x] Post-procesador anti-alucinaciones
-  - [x] Soporte multi-formato (mp3, wav, m4a, flac, mkv, mp4...)
-- [x] **Fase 1.5** — Mejoras Pro++ (actual)
-  - [x] API local FastAPI (microservicio)
-  - [x] Config avanzada YAML centralizada
-  - [x] Logging profesional (niveles + archivo)
-  - [x] Forced Alignment (sincronizar con letra existente)
-  - [x] Detección musical: (intro), (coro), (instrumental), (outro)
-  - [x] Evaluación de calidad (score de confianza por transcripción)
-  - [x] Procesamiento batch paralelo (worker pool)
-  - [x] FFmpeg bundled con fallback
-  - [x] Limpieza de dependencias
-- [ ] **Fase 2** — Web app (subir audio → genera video con letras)
-- [ ] **Fase 3** — App móvil (reproductor de música con letras)
+A continuación se detalla la evolución del proyecto, estructurada por etapas y objetivos de desarrollo:
+
+### 🛠️ Fase 1 — Letras Sincronizadas en Terminal (Completado)
+*Consiste en el núcleo funcional del reproductor y el motor básico de transcripción local.*
+- [x] **Transcripción Offline**: Integración nativa de Whisper para procesar audios localmente.
+- [x] **Menú Interactivo (TUI)**: Navegación cómoda con flechas para seleccionar canciones, generar letras o reproducir.
+- [x] **Procesamiento en Lote**: Generación desatendida para múltiples archivos simultáneos.
+- [x] **Post-procesador Anti-alucinaciones**: Limpieza inteligente de fragmentos repetitivos y textos de relleno generados por Whisper.
+- [x] **Soporte Multi-formato**: Compatibilidad con extensiones populares (`.mp3`, `.wav`, `.m4a`, `.flac`, `.mkv`, `.mp4`).
+
+### 🚀 Fase 1.5 — Mejoras Pro++ (Actual - Completado)
+*Enfoque en optimización del rendimiento, integraciones y funciones profesionales.*
+- [x] **API Local FastAPI**: Creación de un microservicio HTTP local para conectar el motor con aplicaciones externas.
+- [x] **Configuración YAML Centralizada**: Archivo `config.yaml` para personalizar parámetros avanzados del motor y del reproductor.
+- [x] **Forced Alignment (Alineamiento Maestro)**: Sincronización exacta de archivos de audio contra letras de canciones preexistentes en texto plano.
+- [x] **Detección de Secciones Musicales**: Reconocimiento dinámico y etiquetado inteligente de fragmentos instrumentales, coros, intros y outros.
+- [x] **Mapeo de Calidad**: Cálculo y reporte visual de puntuaciones de confianza por segmento transcrito.
+- [x] **FFmpeg Integrado (Bundled)**: Descarga automática de FFmpeg local para evitar dependencias manuales del sistema.
+- [x] **Optimización de IA (v1.4)**: Migración completa a `faster-whisper` (CTranslate2) con soporte para el modelo **Turbo** y cuantización `int8` (CPU) y `float16` (GPU CUDA), acelerando el procesamiento hasta un 800% de forma segura y estable.
+
+### 🌐 Fase 2 — Aplicación Web (En planificación)
+*Llevar la potencia de la transcripción local y del alineamiento maestro a una interfaz gráfica de navegador.*
+- [ ] **Generador de Videos**: Subir audios y generar videos con las letras animadas/sincronizadas listos para compartir.
+- [ ] **Repositorio Independiente**: Esta aplicación se desarrollará en un repositorio externo para mantener la modularidad, comunicándose directamente con la API FastAPI local de este proyecto.
+
+### 📱 Fase 3 — Aplicación Móvil (En planificación)
+*Llevar la reproducción y visualización de letras en tiempo real a dispositivos móviles.*
+- [ ] **Reproductor de Música Inteligente**: Aplicación nativa con visualización interactiva de letras sincronizadas estilo karaoke.
+- [ ] **Repositorio Independiente**: Construida de forma aislada, utilizando el motor local como servidor de backend o integrando modelos optimizados en el dispositivo.
+
