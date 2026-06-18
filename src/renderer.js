@@ -45,6 +45,34 @@ let initialized = false;
 let lastLayoutWidth = -1;
 let lastLayoutHeight = -1;
 
+// Estado de transición para letras
+let prevLineIdx = -1;
+let fromLineIdx = -1;
+let lineChangeTimeMs = 0;
+
+function clamp(value, min = 0, max = 1) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function easeOutCubic(t) {
+  const x = clamp(t);
+  return 1 - Math.pow(1 - x, 3);
+}
+
+function mix(a, b, t) {
+  return Math.round(a + (b - a) * clamp(t));
+}
+
+function renderProgressLine(prefix, text, maxTextWidth, progress, activeColor, restColor, bold = true) {
+  const clipped = truncate(text, maxTextWidth);
+  const split = Math.max(0, Math.min(clipped.length, Math.round(clipped.length * clamp(progress))));
+  const active = clipped.slice(0, split);
+  const rest = clipped.slice(split);
+  const colorActive = bold ? chalk.bold.rgb(activeColor.r, activeColor.g, activeColor.b) : chalk.rgb(activeColor.r, activeColor.g, activeColor.b);
+  const colorRest = chalk.rgb(restColor.r, restColor.g, restColor.b);
+  return prefix + colorActive(active) + colorRest(rest);
+}
+
 /**
  * Trunca un string a un máximo de caracteres.
  */
@@ -56,14 +84,20 @@ function truncate(str, max) {
  * Encuentra el índice de la línea de letras activa según el tiempo transcurrido.
  */
 function getCurrentLineIdx(lyrics, elapsed) {
+  let low = 0;
+  let high = lyrics.length - 1;
   let idx = -1;
-  for (let i = 0; i < lyrics.length; i++) {
-    if (elapsed >= lyrics[i].time) {
-      idx = i;
+
+  while (low <= high) {
+    const mid = Math.floor((low + high) / 2);
+    if (elapsed >= lyrics[mid].time) {
+      idx = mid;
+      low = mid + 1;
     } else {
-      break;
+      high = mid - 1;
     }
   }
+
   return idx;
 }
 
@@ -116,18 +150,18 @@ function render(state) {
 
   // ─── Centrar e Inyectar Logo Principal (Si hay Pantalla Suficiente) ───
   if (termHeight >= 32) {
-    const logoBoxWidth = 76;
+    const logoBoxWidth = 80;
     const paddingLeft = Math.max(0, Math.floor((termWidth - logoBoxWidth) / 2));
     const p = " ".repeat(paddingLeft);
 
-    lines.push(p + chalk.magenta("    ██╗  ██╗   ██╗██████╗ ██╗ ██████╗███████╗██╗   ██╗███╗   ██╗ ██████╗"));
-    lines.push(p + chalk.magenta("    ██║  ╚██╗ ██╔╝██╔══██╗██║██╔════╝██╔════╝╚██╗ ██╔╝████╗  ██║██╔════╝"));
-    lines.push(p + chalk.cyan("    ██║   ╚████╔╝ ██████╔╝██║██║     ███████╗ ╚████╔╝ ██╔██╗ ██║██║     "));
-    lines.push(p + chalk.cyan("    ██║    ╚██╔╝  ██╔══██╗██║██║     ╚════██║  ╚██╔╝  ██║╚██╗██║██║     "));
-    lines.push(p + chalk.blue("    ███████╗██║   ██║  ██║██║╚██████╗███████║   ██║   ██║ ╚████║╚██████╗"));
-    lines.push(p + chalk.blue("    ╚══════╝╚═╝   ╚═╝  ╚═╝╚═╝ ╚═════╝╚══════╝   ╚═╝   ╚═╝  ╚═══╝ ╚═════╝"));
+    lines.push(p + chalk.magenta("  ████████╗██╗████████╗ ██████╗ ███████╗██╗   ██╗     ██████╗███╗   ███╗██████╗ "));
+    lines.push(p + chalk.magenta("  ╚══██╔══╝██║╚══██╔══╝██╔═══██╗██╔════╝╚██╗ ██╔╝    ██╔════╝████╗ ████║██╔══██╗"));
+    lines.push(p + chalk.cyan("     ██║   ██║   ██║   ██║   ██║█████╗   ╚████╔╝     ██║     ██╔████╔██║██║  ██║"));
+    lines.push(p + chalk.cyan("     ██║   ██║   ██║   ██║   ██║██╔══╝    ╚██╔╝      ██║     ██║╚██╔╝██║██║  ██║"));
+    lines.push(p + chalk.blue("     ██║   ██║   ██║   ╚██████╔╝██║        ██║       ╚██████╗██║ ╚═╝ ██║██████╔╝"));
+    lines.push(p + chalk.blue("     ╚═╝   ╚═╝   ╚═╝    ╚═════╝ ╚═╝        ╚═╝        ╚═════╝╚═╝     ╚═╝╚═════╝ "));
     lines.push("");
-    lines.push(p + chalk.gray("         ✦  Inteligencia Artificial Offline — Modo Terminal v1.0  ✦"));
+    lines.push(p + chalk.gray("         ✦  Inteligencia Artificial Offline — Version Terminal v1.4  ✦"));
     lines.push("");
   }
 
@@ -149,21 +183,94 @@ function render(state) {
 
   // 5 slots fijos para letras (mantiene altura constante)
   const lyricSlots = ["", "", "", "", ""];
+  const nowMs = Date.now();
+  if (lineIdx !== prevLineIdx) {
+    fromLineIdx = Math.abs(lineIdx - prevLineIdx) === 1 ? prevLineIdx : -1;
+    lineChangeTimeMs = nowMs;
+    prevLineIdx = lineIdx;
+  }
+
   if (lineIdx >= 0) {
-    if (lineIdx > 1)
-      lyricSlots[0] = chalk.gray.dim(`      ${truncate(lyrics[lineIdx - 2].text, innerWidth - 8)}`);
-    if (lineIdx > 0)
-      lyricSlots[1] = chalk.gray(`      ${truncate(lyrics[lineIdx - 1].text, innerWidth - 8)}`);
+    const easeOut = easeOutCubic;
+    const transition = lineChangeTimeMs
+      ? easeOut((nowMs - lineChangeTimeMs) / 600)
+      : 1;
 
-    const colors = [chalk.bold.white, chalk.bold.cyan, chalk.bold.yellow, chalk.bold.magenta];
-    lyricSlots[2] = colors[lineIdx % colors.length](`  ♪   ${lyrics[lineIdx].text}`);
+    const inLineTransition = fromLineIdx >= 0 && fromLineIdx !== lineIdx && transition < 1;
+    const maxLyricWidth = innerWidth - 8;
 
-    if (lineIdx < lyrics.length - 1)
-      lyricSlots[3] = chalk.gray(`      ${truncate(lyrics[lineIdx + 1].text, innerWidth - 8)}`);
-    if (lineIdx < lyrics.length - 2)
-      lyricSlots[4] = chalk.gray.dim(`      ${truncate(lyrics[lineIdx + 2].text, innerWidth - 8)}`);
+    const isFirstHalf = inLineTransition && transition < 0.5;
+    const baseIdx = isFirstHalf ? lineIdx - 1 : lineIdx;
+
+    const texts = [
+      (baseIdx > 1) ? lyrics[baseIdx - 2].text : "",
+      (baseIdx > 0) ? lyrics[baseIdx - 1].text : "",
+      lyrics[baseIdx].text,
+      (baseIdx < lyrics.length - 1) ? lyrics[baseIdx + 1].text : "",
+      (baseIdx < lyrics.length - 2) ? lyrics[baseIdx + 2].text : "",
+    ];
+
+    const activeColorBase = { r: 57, g: 255, b: 20 }; // Verde neón
+    const restColorBase = { r: 95, g: 95, b: 95 };     // Gris opaco
+
+    const getProgressOf = (idx) => {
+      if (idx < 0 || idx >= lyrics.length) return 0;
+      const nextTime = lyrics[idx + 1] ? lyrics[idx + 1].time : lyrics[idx].time + 3;
+      const duration = nextTime - lyrics[idx].time;
+      return clamp((elapsed - lyrics[idx].time) / (duration || 1));
+    };
+
+    if (inLineTransition) {
+      const factorActive = transition;
+      const factorOldActive = 1 - transition;
+
+      const colorNewActive = {
+        r: mix(restColorBase.r, activeColorBase.r, factorActive),
+        g: mix(restColorBase.g, activeColorBase.g, factorActive),
+        b: mix(restColorBase.b, activeColorBase.b, factorActive),
+      };
+
+      const colorOldActive = {
+        r: mix(restColorBase.r, activeColorBase.r, factorOldActive),
+        g: mix(restColorBase.g, activeColorBase.g, factorOldActive),
+        b: mix(restColorBase.b, activeColorBase.b, factorOldActive),
+      };
+
+      if (isFirstHalf) {
+        lyricSlots[0] = texts[0] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[0], maxLyricWidth)}`) : "";
+        lyricSlots[1] = texts[1] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[1], maxLyricWidth)}`) : "";
+
+        const prog2 = getProgressOf(lineIdx - 1);
+        lyricSlots[2] = renderProgressLine("  ♪   ", texts[2], maxLyricWidth, prog2, colorOldActive, restColorBase);
+
+        const prog3 = getProgressOf(lineIdx);
+        lyricSlots[3] = texts[3] ? renderProgressLine("      ", texts[3], maxLyricWidth, prog3, colorNewActive, restColorBase, false) : "";
+
+        lyricSlots[4] = texts[4] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[4], maxLyricWidth)}`) : "";
+      } else {
+        lyricSlots[0] = texts[0] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[0], maxLyricWidth)}`) : "";
+
+        const prog1 = getProgressOf(lineIdx - 1);
+        lyricSlots[1] = texts[1] ? renderProgressLine("      ", texts[1], maxLyricWidth, prog1, colorOldActive, restColorBase, false) : "";
+
+        const prog2 = getProgressOf(lineIdx);
+        lyricSlots[2] = renderProgressLine("  ♪   ", texts[2], maxLyricWidth, prog2, colorNewActive, restColorBase);
+
+        lyricSlots[3] = texts[3] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[3], maxLyricWidth)}`) : "";
+        lyricSlots[4] = texts[4] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[4], maxLyricWidth)}`) : "";
+      }
+    } else {
+      lyricSlots[0] = texts[0] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[0], maxLyricWidth)}`) : "";
+      lyricSlots[1] = texts[1] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[1], maxLyricWidth)}`) : "";
+
+      const prog2 = getProgressOf(lineIdx);
+      lyricSlots[2] = renderProgressLine("  ♪   ", texts[2], maxLyricWidth, prog2, activeColorBase, restColorBase);
+
+      lyricSlots[3] = texts[3] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[3], maxLyricWidth)}`) : "";
+      lyricSlots[4] = texts[4] ? chalk.rgb(restColorBase.r, restColorBase.g, restColorBase.b)(`      ${truncate(texts[4], maxLyricWidth)}`) : "";
+    }
   } else {
-    lyricSlots[2] = chalk.gray.italic(`  ♪   Esperando que comience la letra...`);
+    lyricSlots[2] = chalk.rgb(95, 95, 95).italic(`  ♪   Esperando que comience la letra...`);
   }
   for (const slot of lyricSlots) lines.push(slot);
 
@@ -173,6 +280,7 @@ function render(state) {
   // ─── Controles ─────────────────────────────────────────────
   if (finished) {
     lines.push(chalk.bold.green("  ✅ ¡Canción terminada!"));
+    lines.push(chalk.gray("     👉 Pulsa [Enter] o [Espacio] para volver al menú principal..."));
     lines.push(chalk.cyan("  " + "─".repeat(innerWidth + 2)));
   } else {
     const footerStr = playing 
@@ -225,6 +333,9 @@ function resetRenderer() {
   // Reiniciar geometry caches cuando se cierre completamente el script si fuera necesario.
   fixedWidth = null;
   fixedHeight = null;
+  prevLineIdx = -1;
+  fromLineIdx = -1;
+  lineChangeTimeMs = 0;
 }
 
 module.exports = { render, getCurrentLineIdx, resetRenderer, SAFE_MODE };

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * index.js — Entrada Unificada de LyricSync
+ * index.js — Entrada Unificada de Titofy CMD
  *
  * Administra todo el reproductor usando módulos asíncronos limpios en el mismo proceso.
  * Evita la sobre-multiplicación de procesos y colisiones de terminal.
@@ -13,26 +13,39 @@ process.env.PATH = SYSTEM_ENV.PATH; // Exponer universalmente a hijos
 const cliArgs = process.argv.slice(2);
 const audioArgIdx = cliArgs.indexOf("--audio");
 const lrcArgIdx = cliArgs.indexOf("--lrc");
+const vizMode = cliArgs.includes("--viz");
 
 if (audioArgIdx !== -1 && lrcArgIdx !== -1) {
-  // MODO DIRECTO (Reproductor Single)
+  // MODO DIRECTO (Reproductor Single o Visualizador)
   const audioFile = cliArgs[audioArgIdx + 1];
   const lrcFile = cliArgs[lrcArgIdx + 1];
 
-  const { startPlayer } = require("./src/player");
-  startPlayer(audioFile, lrcFile, SYSTEM_ENV)
-    .then(() => process.exit(0))
-    .catch((err) => {
-      console.error(err);
-      process.exit(1);
-    });
+  if (vizMode) {
+    // 🌈 MODO VISUALIZADOR ASCII
+    const { startAsciiPlayer } = require("./src/ascii-player");
+    startAsciiPlayer(audioFile, lrcFile, SYSTEM_ENV)
+      .then(() => process.exit(0))
+      .catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  } else {
+    // ▶ MODO REPRODUCTOR CLÁSICO
+    const { startPlayer } = require("./src/player");
+    startPlayer(audioFile, lrcFile, SYSTEM_ENV)
+      .then(() => process.exit(0))
+      .catch((err) => {
+        console.error(err);
+        process.exit(1);
+      });
+  }
 } else {
   // MODO MENÚ INTERACTIVO (Loop principal)
   const { startMenuLoop } = require("./src/ui/menu-core");
 
   startMenuLoop().catch((err) => {
     if (err.isTtyError || err.message?.includes("force closed")) {
-      console.log("\n\n  👋 LyricSync cerrado.\n");
+      console.log("\n\n  👋 Titofy CMD cerrado.\n");
       process.exit(0);
     }
     console.error(`\nError: ${err.message}`);
