@@ -13,10 +13,47 @@ Opciones:
   --words         Usar timestamps por PALABRA (más preciso, más líneas)
 """
 
-import stable_whisper as whisper
-import torch
 import sys
 import os
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Solución de Carga de DLLs para Windows CUDA y PyAV (Python 3.8+)
+# ──────────────────────────────────────────────────────────────────────────────
+if os.name == "nt":
+    # 1. Obtener la raíz del entorno virtual (.venv)
+    venv_root = os.path.dirname(os.path.dirname(sys.executable))
+    site_packages = os.path.join(venv_root, "Lib", "site-packages")
+
+    if os.path.exists(site_packages):
+        # 2. Agregar paths de bibliotecas nvidia locales de la venv
+        for pkg in ["cublas", "cudnn", "cuda_nvrtc", "cuda_runtime"]:
+            bin_dir = os.path.join(site_packages, "nvidia", pkg, "bin")
+            if os.path.exists(bin_dir):
+                try:
+                    os.add_dll_directory(bin_dir)
+                except Exception:
+                    pass
+
+        # 3. Agregar path de PyAV (av.libs)
+        av_libs = os.path.join(site_packages, "av.libs")
+        if os.path.exists(av_libs):
+            try:
+                os.add_dll_directory(av_libs)
+            except Exception:
+                pass
+
+    # 4. Agregar paths de CUDA en el sistema si existen
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        bin_dir = os.path.join(cuda_path, "bin")
+        if os.path.exists(bin_dir):
+            try:
+                os.add_dll_directory(bin_dir)
+            except Exception:
+                pass
+
+import stable_whisper as whisper
+import torch
 import re
 import argparse
 import subprocess
@@ -56,8 +93,18 @@ def detect_device() -> tuple[str, str]:
     return "cpu", "CPU"
 
 
-def is_model_downloaded(model_name: str) -> bool:
+def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     """Verifica si el modelo Whisper ya está en la caché local."""
+    fw_name = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+    std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+
+    if use_faster:
+        # Check huggingface hub cache for faster-whisper
+        hf_cache = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        fw_folder = f"models--Systran--faster-whisper-{fw_name}"
+        if os.path.exists(os.path.join(hf_cache, fw_folder)):
+            return True
+
     import importlib
     download_root = os.getenv(
         "XDG_CACHE_HOME", 
@@ -66,7 +113,7 @@ def is_model_downloaded(model_name: str) -> bool:
     
     try:
         openai_whisper = importlib.import_module("whisper")
-        url = openai_whisper._MODELS.get(model_name)
+        url = openai_whisper._MODELS.get(std_name)
     except Exception:
         return False
         
@@ -76,6 +123,48 @@ def is_model_downloaded(model_name: str) -> bool:
     expected_filename = url.split("/")[-1]
     model_path = os.path.join(download_root, expected_filename)
     return os.path.exists(model_path)
+
+
+def load_whisper_model(model_name: str, device: str, compute_type: str = "auto"):
+    """
+    Carga el modelo Whisper. Prioriza 'faster-whisper' mediante CTranslate2 para máxima
+    velocidad, menor consumo de RAM y soporte de cuantización, con fallback robusto
+    a la librería Whisper estándar de PyTorch si falla o no está disponible.
+    """
+    model_name_fw = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+    model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+
+    try:
+        import stable_whisper
+        
+        # Determinar compute_type adecuado para faster-whisper
+        if compute_type == "auto":
+            selected_compute = "float16" if device == "cuda" else "int8"
+        else:
+            selected_compute = compute_type
+            
+        log.info(f"Intentando cargar faster-whisper ({model_name_fw}) en {device} con compute_type={selected_compute}...")
+        print(f"  ⚡ Usando motor optimizado faster-whisper ({selected_compute})")
+        
+        model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
+        log.info("Carga exitosa con backend faster-whisper")
+        return model, True
+        
+    except Exception as e:
+        log.warning(f"No se pudo cargar con backend faster-whisper: {e}. Reintentando con backend estándar...")
+        print_yellow(f"  ⚠️  No se pudo usar faster-whisper ({e}).")
+        print_yellow("     Usando motor estandar de PyTorch como fallback seguro.")
+
+    try:
+        import stable_whisper as whisper
+        log.info(f"Cargando modelo estándar PyTorch Whisper ({model_name_std}) en {device}...")
+        model = whisper.load_model(model_name_std, device=device)
+        log.info("Carga exitosa con backend estándar PyTorch")
+        return model, False
+    except Exception as e:
+        log.error(f"Error crítico: Ambos fallaron al cargar el modelo {model_name}: {e}")
+        print(f"\n  ❌ Error crítico al cargar el modelo Whisper: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 def resolve_local_binary(binary_name: str) -> str | None:
@@ -360,12 +449,16 @@ def generate_lrc(
 
     log.info(f"Iniciando transcripción: {basename} [modelo={model_name}, lang={lang_display}, device={device}]")
     print(f"  ⏳ Cargando modelo '{model_name}' en {device.upper()}...")
-    if not is_model_downloaded(model_name):
+    
+    wcfg = cfg.get("whisper", {})
+    compute_type = wcfg.get("compute_type", "auto")
+
+    if not is_model_downloaded(model_name, use_faster=True):
         print(f"     ℹ️  Parece ser la primera vez que usas este modelo. Se descargará automáticamente, espera...")
     print()
 
-    model = whisper.load_model(model_name, device=device)
-    log.info(f"Modelo '{model_name}' cargado en {device} [{device_name}]")
+    model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+    log.info(f"Modelo '{model_name}' cargado en {device} [{device_name}] (faster={is_faster})")
 
     print(f"  🔄 Transcribiendo (Corriendo modelo IA seleccionado)... ")
     print(f"     ⚠️ Esto puede tardar desde segundos hasta minutos dependiendo de tu cpu/gpu, modelo elegido y tamaño del archivo.")
@@ -376,7 +469,6 @@ def generate_lrc(
     initial_prompt = INITIAL_PROMPTS.get(lang_key, INITIAL_PROMPTS.get("default", ""))
 
     # Leer parámetros de config.yaml (con fallbacks hardcoded)
-    wcfg = cfg.get("whisper", {})
     transcribe_kwargs = {
         "verbose": False,
         "fp16": use_fp16,  # True en GPU (FP16 = 2x más rápido), False en CPU
@@ -392,6 +484,9 @@ def generate_lrc(
 
     if language:
         transcribe_kwargs["language"] = language
+
+    if is_faster:
+        transcribe_kwargs.pop("fp16", None)
 
     # stable-ts devuelve un objeto WhisperResult
     result_obj = model.transcribe(audio_path, **transcribe_kwargs)
@@ -539,14 +634,12 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", default=None,
                         help="Nombre del archivo .lrc de salida (default: mismo nombre que el audio)")
     parser.add_argument("--model", "-m", default="small",
-                        choices=["tiny", "base", "small", "medium", "large"],
+                        choices=["base", "small", "turbo"],
                         help=(
                             "Modelo Whisper a usar (default: small)\n"
-                            "  tiny   -> muy rápido, menos preciso\n"
-                            "  base   -> rápido, precisión media\n"
-                            "  small  -> buen balance calidad/velocidad <- recomendado\n"
-                            "  medium -> muy preciso, más lento\n"
-                            "  large  -> máxima calidad, lento"
+                            "  turbo  -> lo mejor de lo mejor: gran calidad y velocidad extrema\n"
+                            "  small  -> el bueno: balance recomendado para la mayoría\n"
+                            "  base   -> el rápido: baja precisión, menos recursos"
                         ))
     parser.add_argument("--language", "-l", default=None,
                         help=(

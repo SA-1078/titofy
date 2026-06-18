@@ -161,7 +161,7 @@ function render(state) {
     lines.push(p + chalk.blue("     ██║   ██║   ██║   ╚██████╔╝██║        ██║       ╚██████╗██║ ╚═╝ ██║██████╔╝"));
     lines.push(p + chalk.blue("     ╚═╝   ╚═╝   ╚═╝    ╚═════╝ ╚═╝        ╚═╝        ╚═════╝╚═╝     ╚═╝╚═════╝ "));
     lines.push("");
-    lines.push(p + chalk.gray("         ✦  Inteligencia Artificial Offline — Modo Terminal v1.0  ✦"));
+    lines.push(p + chalk.gray("         ✦  Inteligencia Artificial Offline — Version Terminal v1.4  ✦"));
     lines.push("");
   }
 

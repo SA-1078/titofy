@@ -6,8 +6,9 @@
 
 # ─── Motor Whisper IA ─────────────────────────────────────────────────────────
 whisper:
-  default_model: "small"          # tiny | base | small | medium | large
+  default_model: "small"          # base | small | turbo
   default_language: "es"          # es, en, pt, fr, it, de  ("auto" para detectar)
+  compute_type: "auto"            # auto | float16 (GPU) | int8 (CPU rápido) | float32
   beam_size: 8                    # Mayor = más preciso pero más lento (default: 5)
   temperature: [0.0, 0.1, 0.2, 0.4]  # Escala de fallback (más conservadora = menos alucinaciones)
   no_speech_threshold: 0.55       # Sensibilidad a voces suaves (menor = más sensible)

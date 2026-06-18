@@ -1,13 +1,18 @@
-# 🎵 Titofy CMD v1.3 — Motor de Generación de Letras Sincronizadas Offline
+# 🎵 Titofy CMD v1.4 — Motor de Generación de Letras Sincronizadas Offline
 
-Software **100% local y offline** que genera letras de canciones sincronizadas automáticamente usando IA (ecosistema Whisper avanzado) y las reproduce en la terminal al ritmo de la música. Incluye API local, forced alignment y procesamiento batch paralelo. Todo se procesa en tu propio ordenador: *Nada se sube a internet.*
+Software **100% local y offline** que genera letras de canciones sincronizadas automáticamente usando IA (ecosistema Whisper acelerado por hardware) y las reproduce en la terminal al ritmo de la música. Incluye API local, forced alignment y procesamiento batch paralelo. Todo se procesa en tu propio ordenador: *Nada se sube a internet.*
+
+### ✨ Novedades de la v1.4
+- **Aceleración con `faster-whisper`**: Migración al backend optimizado CTranslate2 de `faster-whisper`, logrando velocidades de procesamiento de 4x a 8x más rápidas tanto en CPU como en GPU.
+- **Cuantización Inteligente `int8`**: Transcripción acelerada por hardware de bajo consumo en CPU sin pérdida perceptible de precisión, reduciendo drásticamente el consumo de memoria RAM.
+- **Modelo Turbo (SOTA)**: Añadido soporte nativo para el modelo de última generación `large-v3-turbo` (Turbo), que ofrece la increíble precisión de `large-v3` a la velocidad de procesamiento del modelo `small`.
+- **Menú Simplificado y Optimizado**: Se redujeron las opciones del menú de selección a la terna útil ideal: **Turbo** (Calidad Pro/Máxima), **Small** (El Bueno/Balanceado) y **Base** (El Rápido/Borrador).
+- **Entorno Virtual Aislado (`.venv`)**: Aislamiento local de dependencias de Python para evitar contaminar la instalación de tu sistema global.
 
 ### ✨ Novedades de la v1.3
 - **Renombramiento General**: Consolidación total del ecosistema bajo el nombre **Titofy CMD** (ex LyricSync).
-- **Cabecera Renovada**: Nuevo logotipo ASCII en bloques en 3D que deletrea "TITOFY CMD" centrado en terminales de gran tamaño.
-- **Scroll Continuo Suave (Cross-fade Scroll)**: Efecto dinámico de desplazamiento vertical que previene saltos de texto abruptos intercambiando las letras a mitad de la transición (`t = 0.5`).
-- **Resaltado Spotify-Style**: Iluminación progresiva de letras letra a letra (`renderProgressLine`) integrada en el reproductor simple y visualizador ASCII a 20 FPS (50ms).
-- **Opacidades Homogéneas**: Slots de letras anteriores y posteriores con un tono gris oscuro unificado (`rgb(95, 95, 95)`) y letra actual en verde neón brillante (`rgb(57, 255, 20)`).
+- **Scroll Continuo Suave (Cross-fade Scroll)**: Efecto dinámico de desplazamiento vertical que previene saltos de texto abruptos.
+- **Resaltado Spotify-Style**: Iluminación progresiva de letras letra a letra (`renderProgressLine`) a 20 FPS (50ms).
 
 ---
 
@@ -82,22 +87,27 @@ Esto instala automáticamente:
 
 ### 3. Instalar dependencias de Python
 
+Recomendamos utilizar el entorno virtual local `.venv` (el cual es resuelto automáticamente por la app):
+
 ```bash
-pip install -r requirements.txt
-# o manualmente:
-pip install stable-ts openai-whisper rapidfuzz pyyaml fastapi uvicorn[standard]
+# Crear entorno virtual (.venv)
+python -m venv .venv
+
+# Instalar dependencias
+.venv\Scripts\pip install -r requirements.txt
 ```
 
 | Paquete | Tamaño | Para qué |
 |---------|--------|----------|
 | `stable-ts` | ~2 MB | Wrapper para Whisper con alineamiento DTW y VAD |
-| `openai-whisper` | ~3 MB + modelo | Motor IA de transcripción vocal (100% offline) |
+| `faster-whisper` | ~3 MB | Motor de inferencia ultrarrápido (CTranslate2) |
+| `openai-whisper` | ~3 MB | Motor IA estándar (usado como fallback) |
 | `rapidfuzz` | ~1.5 MB | Fuzzy matching para limpieza de duplicados |
 | `pyyaml` | ~0.5 MB | Lectura de config.yaml |
 | `fastapi` | ~1 MB | API local (microservicio HTTP) |
 | `uvicorn` | ~0.5 MB | Servidor ASGI para FastAPI |
 
-> ⚠️ **Nota:** La primera vez que generes letras, se descargarán una única vez los modelos de IA localmente (~461 MB para `small` de Whisper, y un detector VAD hiper-ligero). A partir de allí, puedes usar la app **incluso sin conexión a internet o WiFi.**
+> ⚠️ **Nota:** La primera vez que generes letras, se descargarán una única vez los modelos de IA localmente (~800 MB para `turbo` y un detector VAD hiper-ligero). A partir de allí, puedes usar la app **incluso sin conexión a internet o WiFi.**
 
 ### 4. Instalar FFmpeg (si no lo tienes)
 
@@ -187,15 +197,13 @@ python lyrics_postprocess.py "lrc/mi_cancion.lrc" --output limpia.lrc
 
 ## 🤖 Modelos de Whisper
 
-| Modelo   | Precisión | Velocidad (CPU)       | RAM   | Tamaño descarga |
-|----------|-----------|----------------------|-------|-----------------|
-| `tiny`   | ⭐        | ⚡⚡⚡ ~18 seg/canción  | ~1 GB | ~75 MB          |
-| `base`   | ⭐⭐      | ⚡⚡ ~25 seg/canción   | ~1 GB | ~139 MB         |
-| `small`  | ⭐⭐⭐ ← recomendado | ⚡ ~1 min/canción | ~2 GB | ~461 MB |
-| `medium` | ⭐⭐⭐⭐   | 🐢 ~10-15 min/canción | ~5 GB | ~1.5 GB         |
-| `large`  | ⭐⭐⭐⭐⭐  | 🐌 ~30+ min/canción   | ~10 GB| ~3 GB           |
+| Modelo   | Precisión | Velocidad (CPU)*       | RAM   | Tamaño descarga | Descripción |
+|----------|-----------|----------------------|-------|-----------------|-------------|
+| `base`   | ⭐⭐      | ⚡⚡⚡ ~10 seg/canción  | ~1 GB | ~139 MB         | El rápido: baja precisión, menos recursos |
+| `small`  | ⭐⭐⭐     | ⚡⚡ ~20-30 seg/canción | ~2 GB | ~461 MB         | El bueno: balance recomendado para uso estándar |
+| `turbo`  | ⭐⭐⭐⭐⭐ ← recomendado | ⚡ ~30-40 seg/canción | ~4 GB | ~809 MB | Lo mejor: calidad profesional (large-v3) y velocidad extrema |
 
-> 💡 Los tiempos son aproximados para una canción de ~3 minutos en CPU. Con GPU NVIDIA los tiempos se reducen enormemente.
+> 💡 *Los tiempos son estimaciones para una canción de ~3 minutos en CPU usando la aceleración `faster-whisper` (`int8`). Con GPU NVIDIA los tiempos se reducen drásticamente (menos de 5 segundos).*
 
 ---
 

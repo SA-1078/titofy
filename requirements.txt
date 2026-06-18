@@ -9,8 +9,15 @@
 
 # IA / transcripcion offline
 stable-ts
+faster-whisper
 openai-whisper
 torch
+av==12.3.0
+
+
+# Aceleración GPU CUDA para faster-whisper en Windows (opcional)
+nvidia-cublas-cu12
+nvidia-cudnn-cu12
 
 # Limpieza y post-procesado de letras
 rapidfuzz

@@ -11,11 +11,9 @@
  *   node generate-lrc.js song.mp3 --words          (timestamp por palabra)
  *
  * Modelos:
- *   tiny   → muy rápido, menos preciso
- *   base   → rápido, precisión media
- *   small  → buen balance calidad/velocidad  ← recomendado
- *   medium → muy preciso, más lento
- *   large  → máxima calidad, muy lento
+ *   turbo  → súper rápido, precisión extrema (large-v3)  ← lo mejor
+ *   small  → buen balance calidad/velocidad  ← el bueno
+ *   base   → rápido, baja precisión  ← el rápido
  */
 
 const { spawn } = require("child_process");
@@ -40,16 +38,14 @@ Opciones:
   --force                       Regenerar aunque ya exista el .lrc
 
 Modelos:
-  tiny   → Muy rápido, menos preciso
-  base   → Rápido, precisión media
-  small  → Buen balance calidad/velocidad  ← recomendado
-  medium → Muy preciso, más lento
-  large  → Máxima calidad, muy lento
+  turbo  → Súper rápido, precisión extrema (large-v3)  ← lo mejor de lo mejor
+  small  → Buen balance calidad/velocidad  ← el bueno
+  base   → Rápido, menor precisión  ← el rápido
 
 Ejemplos:
   node generate-lrc.js song.mp3
   node generate-lrc.js song.mp3 --language es
-  node generate-lrc.js song.mp3 --model medium --language es
+  node generate-lrc.js song.mp3 --model turbo --language es
   node generate-lrc.js song.mp3 --words --language es
   node generate-lrc.js "C:\\Music\\cancion.mp3" --output letras.lrc
 `);

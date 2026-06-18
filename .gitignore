@@ -9,4 +9,6 @@ lrc/
 __pycache__/
 bin/
 logs/
-_temp_lyrics.txt
+_temp_lyrics.txt
+.venv/
+venv/

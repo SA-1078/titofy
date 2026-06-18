@@ -117,11 +117,14 @@ class PostprocessRequest(BaseModel):
 def _get_model(model_name: str):
     """Carga un modelo con cache."""
     if model_name not in model_cache:
-        import stable_whisper as whisper
-        from whisper_transcribe import detect_device
+        from whisper_transcribe import detect_device, load_whisper_model
         device, device_name = detect_device()
+        wcfg = cfg.get("whisper", {})
+        compute_type = wcfg.get("compute_type", "auto")
+        
         log.info(f"Cargando modelo '{model_name}' en {device} (primera vez, se cacheará)...")
-        model_cache[model_name] = whisper.load_model(model_name, device=device)
+        model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+        model_cache[model_name] = model
     return model_cache[model_name]
 
 

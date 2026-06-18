@@ -17,6 +17,7 @@ DEFAULTS = {
     "whisper": {
         "default_model": "small",
         "default_language": "es",
+        "compute_type": "auto",
         "beam_size": 8,
         "temperature": [0.0, 0.1, 0.2, 0.4],
         "no_speech_threshold": 0.55,

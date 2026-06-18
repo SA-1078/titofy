@@ -52,11 +52,9 @@ function renderTrackHeader(audioPath) {
 
 function modelChoices(backValue = "__back__") {
   return [
-    ui.actionChoice("tiny", "Muy rapido, menor precision", "tiny", "muted"),
-    ui.actionChoice("base", "Rapido, borrador decente", "base", "muted"),
-    ui.actionChoice("small", "Balance recomendado", "small", "ok"),
-    ui.actionChoice("medium", "Mas precision, mas lento", "medium", "warn"),
-    ui.actionChoice("large", "Maxima precision, muy pesado", "large", "warn"),
+    ui.actionChoice("turbo", "Turbo (SOTA) - Lo mejor (Calidad Pro y rapido)", "turbo", "ok"),
+    ui.actionChoice("small", "Small - El bueno (Calidad media, balanceado)", "small", "info"),
+    ui.actionChoice("base", "Base - El rapido (Baja precision, menos recursos)", "base", "muted"),
     ui.separator(),
     ui.actionChoice("Volver", "Regresar sin cambios", backValue, "muted"),
   ];
@@ -65,9 +63,9 @@ function modelChoices(backValue = "__back__") {
 async function chooseModel(title = "Modelo de transcripcion") {
   ui.header(title);
   ui.box("Guia de modelos", [
-    ui.kv("small", "Recomendado para la mayoria de canciones"),
-    ui.kv("medium", "Mejor calidad, bastante mas lento"),
-    ui.kv("large", "Mejor calidad, alto uso de CPU/RAM"),
+    ui.kv("turbo", "Lo mejor de lo mejor: calidad profesional y velocidad extrema"),
+    ui.kv("small", "El bueno: excelente balance para la mayoria de canciones"),
+    ui.kv("base", "El rapido: menor precision, ideal para equipos antiguos o lentos"),
   ]);
   ui.footer();
 
@@ -84,20 +82,7 @@ async function chooseModel(title = "Modelo de transcripcion") {
 }
 
 async function confirmSlowModel(model, count = 1) {
-  if (model !== "medium" && model !== "large") return true;
-
-  const minutes = model === "medium" ? 12 : 30;
-  const estimate = count * minutes;
-  ui.notice("Tarea larga", `Tiempo estimado: cerca de ${estimate} minutos para ${count} pista(s).`, "warn");
-
-  const { ok } = await prompt([{
-    type: "confirm",
-    name: "ok",
-    message: "Continuar?",
-    default: false,
-  }]);
-
-  return ok;
+  return true;
 }
 
 async function generateLrc(audioPath, model = "small", language = "es") {

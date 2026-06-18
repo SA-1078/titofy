@@ -15,17 +15,54 @@ Uso como módulo:
     align_lyrics("audio.mp3", "texto de la letra...", "output.lrc")
 """
 
-import stable_whisper as whisper
-import torch
 import sys
 import os
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Solución de Carga de DLLs para Windows CUDA y PyAV (Python 3.8+)
+# ──────────────────────────────────────────────────────────────────────────────
+if os.name == "nt":
+    # 1. Obtener la raíz del entorno virtual (.venv)
+    venv_root = os.path.dirname(os.path.dirname(sys.executable))
+    site_packages = os.path.join(venv_root, "Lib", "site-packages")
+
+    if os.path.exists(site_packages):
+        # 2. Agregar paths de bibliotecas nvidia locales de la venv
+        for pkg in ["cublas", "cudnn", "cuda_nvrtc", "cuda_runtime"]:
+            bin_dir = os.path.join(site_packages, "nvidia", pkg, "bin")
+            if os.path.exists(bin_dir):
+                try:
+                    os.add_dll_directory(bin_dir)
+                except Exception:
+                    pass
+
+        # 3. Agregar path de PyAV (av.libs)
+        av_libs = os.path.join(site_packages, "av.libs")
+        if os.path.exists(av_libs):
+            try:
+                os.add_dll_directory(av_libs)
+            except Exception:
+                pass
+
+    # 4. Agregar paths de CUDA en el sistema si existen
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        bin_dir = os.path.join(cuda_path, "bin")
+        if os.path.exists(bin_dir):
+            try:
+                os.add_dll_directory(bin_dir)
+            except Exception:
+                pass
+
+import stable_whisper as whisper
+import torch
 import re
 import argparse
 import shutil
 
 from logger import get_logger
 from lyric_config import get_config
-from whisper_transcribe import detect_device, is_model_downloaded, print_yellow, validate_audio_file
+from whisper_transcribe import detect_device, is_model_downloaded, print_yellow, validate_audio_file, load_whisper_model
 
 log = get_logger("align")
 
@@ -91,12 +128,15 @@ def align_lyrics(
     else:
         print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
 
+    wcfg = cfg.get("whisper", {})
+    compute_type = wcfg.get("compute_type", "auto")
+
     log.info(f"Cargando modelo '{model_name}' en {device} para alineación...")
     print(f"  ⏳ Cargando modelo '{model_name}' en {device.upper()}...")
-    if not is_model_downloaded(model_name):
+    if not is_model_downloaded(model_name, use_faster=True):
         print(f"     ℹ️  Parece ser la primera vez que usas este modelo. Se descargará automáticamente, espera...")
     
-    model = whisper.load_model(model_name, device=device)
+    model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
 
     # ── Forced Alignment ───────────────────────────────────────────────────────
     log.info("Ejecutando forced alignment (stable-ts model.align)...")
@@ -173,11 +213,12 @@ if __name__ == "__main__":
     parser.add_argument("--output", "-o", default=None,
                         help="Nombre del archivo .lrc de salida (default: mismo nombre que audio)")
     parser.add_argument("--model", "-m", default="base",
-                        choices=["tiny", "base", "small", "medium", "large"],
+                        choices=["base", "small", "turbo"],
                         help=(
                             "Modelo Whisper para alineación (default: base)\n"
-                            "  base recomendado — suficiente para alineación\n"
-                            "  Modelos más grandes no mejoran significativamente"
+                            "  base  -> recomendado (suficiente para alineación de texto)\n"
+                            "  small -> el bueno: balance recomendado para la mayoría\n"
+                            "  turbo -> lo mejor: calidad profesional y velocidad extrema"
                         ))
     parser.add_argument("--language", "-l", default="es",
                         help="Código de idioma: es, en, pt, fr... (default: es)")
