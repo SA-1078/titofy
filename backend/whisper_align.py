@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-whisper_align.py — Titofy CMD
+whisper_align.py — Titofy
 Forced Alignment: sincroniza una letra existente con el audio.
 
 Mucho más rápido que transcribir desde cero porque el modelo ya
@@ -140,7 +143,7 @@ def align_lyrics(
     title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
-        f"[by:Titofy CMD — Forced Alignment ({model_name}) | lang:{language}]",
+        f"[by:Titofy — Forced Alignment ({model_name}) | lang:{language}]",
         "",
     ]
 
@@ -177,7 +180,7 @@ def align_lyrics(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Titofy CMD — Forced Alignment: sincronizar letra existente con audio",
+        description="Titofy — Forced Alignment: sincronizar letra existente con audio",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("audio", help="Ruta al archivo de audio (.mp3, .wav, .m4a, etc.)")

@@ -1,5 +1,8 @@
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-music_detector.py — Titofy CMD
+music_detector.py — Titofy
 Clasificador heurístico de secciones musicales.
 
 Convierte etiquetas genéricas "(música)" en etiquetas contextuales:

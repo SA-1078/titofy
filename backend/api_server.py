@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-api_server.py — Titofy CMD
+api_server.py — Titofy
 Microservicio local FastAPI que expone el motor Whisper como endpoints HTTP.
 
 Uso:
@@ -43,7 +46,7 @@ cfg = get_config()
 # ──────────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
-    title="Titofy CMD API",
+    title="Titofy API",
     description="Motor de transcripción y sincronización de letras offline",
     version="1.0.0",
 )
@@ -259,7 +262,7 @@ async def postprocess(req: PostprocessRequest):
     output = req.output_path or req.lrc_path
 
     title = os.path.splitext(os.path.basename(req.lrc_path))[0]
-    lrc_content = segments_to_lrc(clean, title, "Titofy CMD — post-procesado vía API")
+    lrc_content = segments_to_lrc(clean, title, "Titofy — post-procesado vía API")
 
     with open(output, "w", encoding="utf-8") as f:
         f.write(lrc_content)
@@ -316,7 +319,7 @@ if __name__ == "__main__":
 
     print()
     print("  ╭──────────────────────────────────────────────────╮")
-    print("  │  🚀 Titofy CMD API — Servidor Local              │")
+    print("  │  🚀 Titofy API — Servidor Local                 │")
     print("  ╰──────────────────────────────────────────────────╯")
     print(f"  🌐 URL: http://{host}:{port}")
     print(f"  📋 Docs: http://{host}:{port}/docs")

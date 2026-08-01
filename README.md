@@ -22,7 +22,7 @@ La versión **2.1** introduce mejoras significativas de físicas de sonido, usab
 - **Respuesta de Ola en Medios y Agudos**: Movimiento fluido estilo olas a 30 FPS (`ATTACK: 0.97`, `DECAY: 0.72`).
 
 ### ⚡ Interfaz CLI Limpia sin Desplazamiento
-- Fix de secuencias ANSI en `alt-screen.js` y `theme.js`. El encabezado `>> TITOFY CMD` permanece fijo en la fila 1 sin requerir scroll hacia arriba al iniciar o navegar.
+- Fix de secuencias ANSI en `alt-screen.js` y `theme.js`. El encabezado `>> TITOFY CLI` permanece fijo en la fila 1 sin requerir scroll hacia arriba al iniciar o navegar.
 
 ### 🔇 Silenciamiento Estricto de Logs & Barra de Progreso Única
 - Ocultamiento de logs informativos técnicos de consola (redirigidos a `logs/titofy-YYYY-MM-DD.log`).
@@ -41,16 +41,16 @@ La versión **2.1** introduce mejoras significativas de físicas de sonido, usab
 
 | Módulo | Estado | Recomendado para uso diario | Descripción |
 | :--- | :--- | :---: | :--- |
-| **CLI (Node.js)** | 🟢 Estable y funcional | **Sí** | Experiencia TUI completa, reproductor y visualizador espectral. |
+| **Titofy CLI (Node.js)** | 🟢 Estable y funcional | **Sí** | Experiencia TUI completa, reproductor y visualizador espectral. |
 | **Backend (Python)** | 🟢 Estable y funcional | **Sí** | Motor `faster-whisper`, API FastAPI y Forced Alignment. |
-| **App Desktop (Flutter)** | 🟡 En desarrollo (UI básica) | Experimental | Primera versión gráfica nativa para Linux y Windows (en progreso). |
+| **Titofy Desktop App (Flutter)** | 🟡 En desarrollo (UI básica) | Experimental | Primera versión gráfica nativa para Linux y Windows (en progreso). |
 
 ---
 
 ## 📁 Estructura del Proyecto
 
 ```text
-titofy-cmd/
+titofy/
 ├── backend/                     → Motor de IA y API local (Python 3.11+)
 │   ├── api_server.py            → Microservicio FastAPI (http://127.0.0.1:8642/docs)
 │   ├── whisper_transcribe.py    → Transcripción offline con faster-whisper
@@ -62,7 +62,7 @@ titofy-cmd/
 │   ├── config.yaml              → Configuración centralizada
 │   └── requirements.txt
 │
-├── cli/                         → Interfaz de terminal (Node.js)
+├── cli/                         → Interfaz de terminal Titofy CLI (Node.js)
 │   ├── index.js                 → Punto de entrada unificado CLI
 │   ├── generate-lrc.js          → Generador de letras por CLI
 │   ├── scripts/visualizer.py    → Motor visualizador Python
@@ -72,7 +72,7 @@ titofy-cmd/
 │   │   └── ui/                  → Menú interactivo TUI (menu-core.js, alt-screen.js)
 │   └── package.json
 │
-├── desktop/                     → Aplicación de escritorio nativa (Flutter)
+├── desktop/                     → Aplicación de escritorio nativa Titofy Desktop App (Flutter)
 │   ├── lib/                     → Vistas, reproductor media_kit y shell NavRail
 │   ├── pubspec.yaml
 │   └── ...                      → (UI gráfica inicial - en desarrollo)
@@ -88,9 +88,9 @@ titofy-cmd/
 
 | Requisito | Versión mínima | Para qué |
 | :--- | :--- | :--- |
-| **Node.js** | v18+ | CLI, menú interactivo y reproductor de terminal |
+| **Node.js** | v18+ | Titofy CLI, menú interactivo y reproductor de terminal |
 | **Python** | v3.9+ (recomendado 3.11+) | Motor de transcripción Whisper e IA local |
-| **Flutter** | v3.19+ | App Desktop (solo si vas a compilar la app gráfica) |
+| **Flutter** | v3.19+ | Titofy Desktop App (solo si vas a compilar la app gráfica) |
 | **FFmpeg** | v4.4+ | Extracción de audio y reproducción con ffplay |
 
 ---
@@ -100,8 +100,8 @@ titofy-cmd/
 ### 1. Clonar el repositorio
 
 ```bash
-git clone https://github.com/tu-usuario/titofy-cmd.git
-cd titofy-cmd
+git clone https://github.com/tu-usuario/titofy.git
+cd titofy
 ```
 
 ### 2. Configurar el Backend (Python)

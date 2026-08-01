@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /**
- * index.js — Entrada Unificada de Titofy CMD
+ * Titofy — Copyright (C) 2026 Titofy
+ * Licensed under GNU General Public License v3.0 or later.
+ *
+ * index.js — Entrada Unificada de Titofy CLI
  *
  * Administra todo el reproductor usando módulos asíncronos limpios en el mismo proceso.
  * Evita la sobre-multiplicación de procesos y colisiones de terminal.
@@ -45,7 +48,7 @@ if (audioArgIdx !== -1 && lrcArgIdx !== -1) {
 
   startMenuLoop().catch((err) => {
     if (err.isTtyError || err.message?.includes("force closed")) {
-      console.log("\n\n  👋 Titofy CMD cerrado.\n");
+      console.log("\n\n  👋 Titofy CLI cerrado.\n");
       process.exit(0);
     }
     console.error(`\nError: ${err.message}`);
