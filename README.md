@@ -1,4 +1,4 @@
-# 🎵 Titofy v2.1 — Suite Multimedia Offline de Letras Sincronizadas (Monorepo)
+# 🎵 Titofy v2.1 — Suite Multimedia Offline de Letras Sincronizadas
 
 **Titofy** es una suite 100% local y offline para transcribir, sincronizar y reproducir letras de canciones usando inteligencia artificial (ecosistema Whisper acelerado por hardware), reproducirlas al ritmo de la música y visualizar el espectro de audio en tiempo real.
 
@@ -32,7 +32,7 @@ La versión **2.1** introduce mejoras significativas de físicas de sonido, usab
 ### 🎨 Score de Confianza Dinámico
 - Tarjeta final de resultados con puntuación de precisión por código de color: Verde (≥ 80%), Amarillo (60-79%), Rojo (< 60%).
 
-### ⚙️ Carga de CUDA y Estructura Monorepo
+### ⚙️ Carga de CUDA
 - Módulo `soporte_para_cuda.py` para detección y carga dinámica de DLLs de NVIDIA CUDA (cuBLAS, cuDNN) en el entorno virtual `.venv`.
 
 ---
@@ -47,7 +47,7 @@ La versión **2.1** introduce mejoras significativas de físicas de sonido, usab
 
 ---
 
-## 📁 Estructura del Monorepo
+## 📁 Estructura del Proyecto
 
 ```text
 titofy-cmd/
