@@ -1,55 +1,83 @@
-# 🎵 Titofy CMD v1.4 — Motor de Generación de Letras Sincronizadas Offline
+# 🎵 Titofy v2.0 — Suite Multimedia Offline de Letras Sincronizadas
 
-Software **100% local y offline** que genera letras de canciones sincronizadas automáticamente usando IA (ecosistema Whisper acelerado por hardware) y las reproduce en la terminal al ritmo de la música. Incluye API local, forced alignment y procesamiento batch paralelo. Todo se procesa en tu propio ordenador: *Nada se sube a internet.*
+**Titofy** es una suite 100% local y offline que genera letras de canciones sincronizadas automáticamente usando inteligencia artificial (ecosistema Whisper acelerado por hardware) y las reproduce al ritmo de la música.
 
-### ✨ Novedades de la v1.4
-- **Aceleración con `faster-whisper`**: Migración al backend optimizado CTranslate2 de `faster-whisper`, logrando velocidades de procesamiento de 4x a 8x más rápidas tanto en CPU como en GPU.
-- **Cuantización Inteligente `int8`**: Transcripción acelerada por hardware de bajo consumo en CPU sin pérdida perceptible de precisión, reduciendo drásticamente el consumo de memoria RAM.
-- **Modelo Turbo (SOTA)**: Añadido soporte nativo para el modelo de última generación `large-v3-turbo` (Turbo), que ofrece la increíble precisión de `large-v3` a la velocidad de procesamiento del modelo `small`.
-- **Menú Simplificado y Optimizado**: Se redujeron las opciones del menú de selección a la terna útil ideal: **Turbo** (Calidad Pro/Máxima), **Small** (El Bueno/Balanceado) y **Base** (El Rápido/Borrador).
-- **Entorno Virtual Aislado (`.venv`)**: Aislamiento local de dependencias de Python para evitar contaminar la instalación de tu sistema global.
+Incluye:
+- Interfaz de terminal (CLI) con reproductor y visualizador espectral
+- Motor de IA local + API FastAPI
+- Inicio de la aplicación de escritorio nativa (Flutter)
 
-### ✨ Novedades de la v1.3
-- **Renombramiento General**: Consolidación total del ecosistema bajo el nombre **Titofy CMD** (ex LyricSync).
-- **Scroll Continuo Suave (Cross-fade Scroll)**: Efecto dinámico de desplazamiento vertical que previene saltos de texto abruptos.
-- **Resaltado Spotify-Style**: Iluminación progresiva de letras letra a letra (`renderProgressLine`) a 20 FPS (50ms).
+**Todo se procesa en tu propio ordenador. Nada se sube a internet.**
 
 ---
 
-## 📁 Estructura del Proyecto
+## ✨ ¿Qué es nuevo en la v2.0?
 
-```
-titofy_cmd/
-├── index.js                  → Punto de entrada unificado
-├── generate-lrc.js           → Orquestador CLI (Node.js → Python)
-├── whisper_transcribe.py     → Motor IA de transcripción (offline)
-├── whisper_align.py          → Forced Alignment (letra existente → .lrc)
-├── lyrics_postprocess.py     → Post-procesador inteligente
-├── music_detector.py         → Clasificador de secciones musicales
-├── api_server.py             → API local FastAPI (microservicio)
-├── lyric_config.py           → Cargador de configuración
-├── logger.py                 → Sistema de logging profesional
-├── config.yaml               → Configuración central (todos los parámetros)
-├── package.json / requirements.txt
-├── lrc/                      → Letras generadas (.lrc)
-├── logs/                     → Logs del sistema
-├── bin/                      → FFmpeg bundled (opcional)
-├── scripts/
-│   └── download-ffmpeg.js    → Instalador de FFmpeg bundled
-└── src/
-    ├── config.js             → Configuración global y utilidades
-    ├── player.js             → Coordinador del reproductor TUI
-    ├── renderer.js           → Renderizado terminal (ANSI)
-    ├── audio.js              → Gestor de procesos ffplay
-    ├── lrc-parser.js         → Parser de archivos .lrc
-    ├── keyboard.js           → Captura de teclado
-    ├── logger.js             → Logging Node.js
-    ├── ffmpeg-resolver.js    → Resolver FFmpeg (bundle + PATH fallback)
-    ├── api-client.js         → Cliente HTTP para la API local
-    ├── batch-worker.js       → Worker pool para batch paralelo
-    └── ui/
-        ├── menu-core.js      → Motor del menú interactivo
-        └── menu-actions.js   → Acciones del menú
+La versión **2.0** representa el gran salto arquitectónico del proyecto:
+
+- **Arquitectura Monorepo**: El código se reorganizó en tres módulos independientes:
+  - `backend/` → Motor de IA y API local (Python)
+  - `cli/` → Interfaz de terminal, reproductor y visualizador (Node.js)
+  - `desktop/` → Aplicación gráfica de escritorio (Flutter)
+- **Inicio de la App Desktop**: Primera versión de la interfaz nativa para Linux y Windows (UI básica inicial).
+- **Mejor separación de responsabilidades**: Cada módulo tiene su propio entorno de dependencias aislado.
+- Se conservan todas las mejoras de la v1.4 (faster-whisper, modelo turbo, Forced Alignment, post-procesador, etc.).
+
+### Estado actual de la v2.0
+
+| Módulo | Estado | Recomendado para uso diario |
+| :--- | :--- | :--- |
+| **CLI** | Estable y funcional | Sí |
+| **Backend** | Estable y funcional | Sí |
+| **App Desktop** | En desarrollo temprano (UI básica) | Aún no (experimental) |
+
+---
+
+## ✨ Novedades heredadas de la v1.4 y v1.3
+
+### De la v1.4
+- Aceleración con **faster-whisper** (CTranslate2): 4x a 8x más rápido en CPU y GPU.
+- Cuantización inteligente **int8** para CPU (bajo consumo de RAM).
+- Modelo **turbo** (`large-v3-turbo`): calidad de large-v3 a velocidad de small.
+- Menú simplificado con tres modelos útiles: Turbo, Small y Base.
+- Entorno virtual aislado (`.venv`).
+
+### De la v1.3
+- Renombramiento completo a **Titofy CMD**.
+- Scroll continuo suave (Cross-fade Scroll).
+- Resaltado de letras estilo Spotify (palabra por palabra a 20 FPS).
+
+---
+
+## 📁 Estructura del Proyecto (Monorepo)
+
+```text
+titofy-cmd/
+├── backend/                     → Motor de IA y API local (Python)
+│   ├── api_server.py            → Microservicio FastAPI
+│   ├── whisper_transcribe.py    → Transcripción con faster-whisper
+│   ├── whisper_align.py         → Forced Alignment
+│   ├── lyrics_postprocess.py    → Post-procesador anti-alucinaciones
+│   ├── music_detector.py        → Detección de secciones musicales
+│   ├── logger.py                → Sistema de logging
+│   ├── config.yaml              → Configuración central
+│   └── requirements.txt
+│
+├── cli/                         → Interfaz de terminal (Node.js)
+│   ├── index.js                 → Punto de entrada
+│   ├── generate-lrc.js          → Generador de letras por CLI
+│   ├── src/                     → Reproductor, visualizador y TUI
+│   ├── package.json
+│   └── ...
+│
+├── desktop/                     → Aplicación de escritorio (Flutter)
+│   ├── lib/
+│   ├── pubspec.yaml
+│   └── ...                      → (UI básica inicial - en desarrollo)
+│
+├── lrc/                         → Letras generadas (.lrc)
+├── logs/                        → Logs del sistema
+└── README.md
 ```
 
 ---
@@ -57,77 +85,71 @@ titofy_cmd/
 ## ⚙️ Requisitos del Sistema
 
 | Requisito | Versión mínima | Para qué |
-|-----------|---------------|----------|
-| **Node.js** | v18+ | Menú interactivo y reproductor |
-| **Python** | v3.9+ | Motor de transcripción Whisper |
+| :--- | :--- | :--- |
+| **Node.js** | v18+ | CLI, menú interactivo y reproductor |
+| **Python** | v3.9+ (recomendado 3.11+) | Motor de transcripción e IA |
+| **Flutter** | 3.x+ | App Desktop (solo si la vas a usar) |
 | **FFmpeg** | cualquiera | Extracción de audio y reproducción |
 
 ---
 
 ## 🚀 Instalación Completa
 
-### 1. Clonar o descargar el proyecto
+### 1. Clonar el repositorio
 
 ```bash
-cd "C:\Users\TuUsuario\Documents"
 git clone <tu-repo> titofy-cmd
 cd titofy-cmd
 ```
 
-### 2. Instalar dependencias de Node.js
+### 2. Configurar el Backend (Python)
 
 ```bash
+cd backend
+python -m venv .venv
+
+# Windows
+.venv\Scripts\activate
+
+# Linux / macOS
+source .venv/bin/activate
+
+pip install -r requirements.txt
+```
+
+### 3. Configurar la CLI (Node.js)
+
+```bash
+cd ../cli
 npm install
 ```
 
-Esto instala automáticamente:
-- `chalk@4` — colores en terminal
-- `inquirer@8` — menú interactivo con flechas
-- `js-yaml` — lectura de configuración YAML
-
-### 3. Instalar dependencias de Python
-
-Recomendamos utilizar el entorno virtual local `.venv` (el cual es resuelto automáticamente por la app):
+### 4. (Opcional) Configurar la App Desktop
 
 ```bash
-# Crear entorno virtual (.venv)
-python -m venv .venv
-
-# Instalar dependencias
-.venv\Scripts\pip install -r requirements.txt
+cd ../desktop
+flutter pub get
 ```
 
-| Paquete | Tamaño | Para qué |
-|---------|--------|----------|
-| `stable-ts` | ~2 MB | Wrapper para Whisper con alineamiento DTW y VAD |
-| `faster-whisper` | ~3 MB | Motor de inferencia ultrarrápido (CTranslate2) |
-| `openai-whisper` | ~3 MB | Motor IA estándar (usado como fallback) |
-| `rapidfuzz` | ~1.5 MB | Fuzzy matching para limpieza de duplicados |
-| `pyyaml` | ~0.5 MB | Lectura de config.yaml |
-| `fastapi` | ~1 MB | API local (microservicio HTTP) |
-| `uvicorn` | ~0.5 MB | Servidor ASGI para FastAPI |
+*Nota: La App Desktop todavía está en etapa temprana. Se recomienda usar la CLI para uso diario.*
 
-> ⚠️ **Nota:** La primera vez que generes letras, se descargarán una única vez los modelos de IA localmente (~800 MB para `turbo` y un detector VAD hiper-ligero). A partir de allí, puedes usar la app **incluso sin conexión a internet o WiFi.**
+### 5. FFmpeg
 
-### 4. Instalar FFmpeg (si no lo tienes)
+Si no lo tienes instalado:
 
 ```bash
-# Windows (con winget)
+# Windows
 winget install Gyan.FFmpeg
 
-# O descárgalo manualmente de: https://ffmpeg.org/download.html
+# Linux (ejemplo Ubuntu/Debian)
+sudo apt install ffmpeg
 ```
 
-Verifica que esté instalado:
+Verifica la instalación:
+
 ```bash
 ffplay -version
 ```
-
-**Alternativa: FFmpeg bundled** (incluido en el proyecto)
-```bash
-npm run ffmpeg:install
-```
-> Descarga FFmpeg (~85MB) directamente en `bin/`. LyricSync lo detecta automáticamente.
 
 ---
 
@@ -136,106 +158,87 @@ npm run ffmpeg:install
 ### Opción 1: Menú interactivo (recomendado)
 
 ```bash
+cd cli
 npm start
-# o también:
-node index.js
-# o directamente:
-node menu.js
 ```
 
 El menú te permite:
-- 📁 **Explorar** tu carpeta de música (detecta `.mp3`, `.wav`, `.m4a`, `.flac`, `.mkv`, `.mp4`, etc.)
-- 🤖 **Generar letras** con Whisper (elige el modelo de IA)
-- ▶️ **Reproducir** canciones con letras sincronizadas
-- 📋 **Ver** los archivos `.lrc` generados
-- 🚀 **Procesar en lote** varias canciones a la vez
+- Explorar tu carpeta de música (`.mp3`, `.wav`, `.m4a`, `.flac`, `.mp4`, etc.)
+- Generar letras con IA local (elige el modelo)
+- Reproducir canciones con letras sincronizadas
+- Ver los archivos `.lrc` generados
+- Procesar varias canciones en lote
+- Usar Forced Alignment
 
 ### Opción 2: Generar letras por CLI (directo)
 
 ```bash
-node generate-lrc.js "C:\ruta\a\cancion.mp3" --language es
+cd cli
+node generate-lrc.js "ruta/a/cancion.mp3" --language es --model turbo
 ```
 
-Opciones disponibles:
-```
---output  -o  <archivo.lrc>   Nombre del archivo de salida
---model   -m  <modelo>        Modelo Whisper (default: small)
---language -l <codigo>        Forzar idioma: es, en, pt, fr... (default: auto)
---words                       Timestamps por PALABRA
-```
+Opciones principales:
+- `--model` / `-m` → `turbo`, `small` o `base`
+- `--language` / `-l` → `es`, `en`, `pt`, etc.
+- `--output` / `-o` → nombre del archivo de salida
 
-### Opción 3: Forced Alignment (sincronizar con letra existente)
+### Opción 3: Forced Alignment
 
 ```bash
+cd backend
 python whisper_align.py audio.mp3 --lyrics letra.txt --language es
 ```
 
-> 💥 **Nivel Spotify lyrics sync**: si ya tienes la letra, esto produce sincronización perfecta.
+Ideal cuando ya tienes la letra en texto plano y quieres sincronizarla perfectamente.
 
-### Opción 4: API Local (Microservicio HTTP para integraciones)
-
-Este proyecto cuenta con un servidor API local basado en **FastAPI** que actúa como puente para otras aplicaciones.
-
-**¿Para qué sirve?**
-Al ejecutar `npm run api`, se inicia un microservicio web local de alto rendimiento. Esto permite que **cualquier otra aplicación** (ya sea tu futura aplicación web de la **Fase 2**, una app móvil de la **Fase 3**, o scripts automáticos en otros lenguajes) consuma las capacidades de transcripción con Whisper, alineamiento de letras y limpieza inteligente enviando simples peticiones HTTP locales.
+### Opción 4: API Local (FastAPI)
 
 ```bash
-# Iniciar el servidor API local
-npm run api
-
-# Documentación interactiva de la API disponible automáticamente en:
-# http://127.0.0.1:8642/docs
+cd backend
+python api_server.py
 ```
 
-**Principales Endpoints Disponibles:**
-- `POST /transcribe` — Transcribir y sincronizar un archivo de audio local desde cero.
-- `POST /align` — Realizar alineamiento maestro (Forced Alignment) entre un audio y un texto plano con la letra de la canción.
-- `POST /postprocess` — Limpiar y eliminar alucinaciones de un archivo `.lrc` ya generado.
-- `GET /status/{id}` — Consultar el progreso de las tareas asíncronas de transcripción.
-- `GET /health` — Comprobación de estado general del servidor y detección de hardware (CPU/GPU).
+Documentación interactiva disponible en: `http://127.0.0.1:8642/docs`
 
-
-### Opción 5: Limpiar un .lrc existente (post-procesador standalone)
-
-```bash
-python lyrics_postprocess.py "lrc/mi_cancion.lrc"
-python lyrics_postprocess.py "lrc/mi_cancion.lrc" --output limpia.lrc
-```
+Endpoints principales:
+- `POST /transcribe` → Transcribir audio desde cero
+- `POST /align` → Forced Alignment
+- `POST /postprocess` → Limpiar un `.lrc`
+- `GET /health` → Estado del servidor y detección de hardware
 
 ---
 
-## 🤖 Modelos de Whisper
+## 🤖 Modelos de Whisper disponibles
 
-| Modelo   | Precisión | Velocidad (CPU)*       | RAM   | Tamaño descarga | Descripción |
-|----------|-----------|----------------------|-------|-----------------|-------------|
-| `base`   | ⭐⭐      | ⚡⚡⚡ ~10 seg/canción  | ~1 GB | ~139 MB         | El rápido: baja precisión, menos recursos |
-| `small`  | ⭐⭐⭐     | ⚡⚡ ~20-30 seg/canción | ~2 GB | ~461 MB         | El bueno: balance recomendado para uso estándar |
-| `turbo`  | ⭐⭐⭐⭐⭐ ← recomendado | ⚡ ~30-40 seg/canción | ~4 GB | ~809 MB | Lo mejor: calidad profesional (large-v3) y velocidad extrema |
+| Modelo | Precisión | Velocidad (CPU)* | RAM aprox. | Descripción |
+| :--- | :---: | :---: | :---: | :--- |
+| **`base`** | ⭐⭐ | Muy rápida (~10s) | ~1 GB | El rápido (borrador / pruebas) |
+| **`small`** | ⭐⭐⭐ | Rápida (~20-30s) | ~2 GB | Balance recomendado para uso diario |
+| **`turbo`** | ⭐⭐⭐⭐⭐ | Buena (~30-40s) | ~4 GB | **Recomendado** – Mejor calidad (SOTA) |
 
-> 💡 *Los tiempos son estimaciones para una canción de ~3 minutos en CPU usando la aceleración `faster-whisper` (`int8`). Con GPU NVIDIA los tiempos se reducen drásticamente (menos de 5 segundos).*
+*\* Tiempos estimados para una canción de ~3 minutos usando faster-whisper en CPU (int8). Con GPU NVIDIA los tiempos bajan drásticamente.*
 
 ---
 
 ## 🧹 Post-procesador de Letras
 
-El post-procesador `lyrics_postprocess.py` se ejecuta automáticamente después de cada transcripción y corrige:
+Se ejecuta automáticamente después de cada transcripción y corrige:
 
-| Corrección | Ejemplo |
-|-----------|---------|
-| Repeticiones internas | `lo que se fue ×20` → `lo que se fue` |
-| Duplicados consecutivos | 3 líneas iguales seguidas → 1 sola |
-| Duplicados fuzzy (85%+ similares) | Variaciones mínimas → 1 sola |
-| Alucinaciones de Whisper | `"Gracias por ver"`, `"Suscríbete"` → eliminados |
-| Timestamps imposibles | Segmentos de >30s con poco texto → eliminados |
+| Problema | Acción |
+| :--- | :--- |
+| Repeticiones internas | Se reducen a una sola aparición |
+| Duplicados consecutivos | Se eliminan |
+| Duplicados similares (fuzzy) | Se unifican |
+| Alucinaciones típicas | Se eliminan (“Gracias por ver”, etc.) |
+| Timestamps imposibles | Se filtran |
 
 ---
 
 ## 📄 Formato .lrc
 
-Puedes crear archivos `.lrc` manualmente con este formato:
-
-```
+```lrc
 [ti:Nombre de la canción]
+[ar:Artista]
 [00:01.00]Primera línea de la letra
 [00:05.50]Segunda línea
 [00:10.00]♪
@@ -246,45 +249,40 @@ Puedes crear archivos `.lrc` manualmente con este formato:
 ## 🔧 Solución de Problemas
 
 | Error | Solución |
-|-------|----------|
-| `Python no está instalado` | Instala Python 3.9+ desde https://www.python.org/downloads/ |
-| `ffplay no encontrado` | Instala FFmpeg: `winget install Gyan.FFmpeg` y reinicia la terminal |
-| `ModuleNotFoundError: whisper` | Ejecuta: `pip install openai-whisper` |
-| `ModuleNotFoundError: rapidfuzz` | Ejecuta: `pip install rapidfuzz` |
-| Letras con muchos errores | Usa `--language es` para forzar el idioma |
-| Audio sigue sonando después de Ctrl+C | Ya corregido — ffplay se mata automáticamente |
+| :--- | :--- |
+| `Python no encontrado` | Instala Python 3.9+ |
+| `ffplay no encontrado` | Instala FFmpeg y reinicia la terminal |
+| `ModuleNotFoundError` | Activa el `.venv` e instala `requirements.txt` |
+| `Letras con muchos errores` | Usa `--language es` (o el idioma correcto) |
+| `La App Desktop no compila` | Asegúrate de tener Flutter instalado y ejecuta `flutter doctor` |
 
 ---
 
 ## 🌐 Ruta de Desarrollo (Roadmap)
 
-A continuación se detalla la evolución del proyecto, estructurada por etapas y objetivos de desarrollo:
+### ✅ Completado
+- Motor de transcripción offline con `faster-whisper` y modelo `turbo`
+- CLI completa con menú interactivo, reproductor y visualizador
+- Forced Alignment
+- API local FastAPI
+- Post-procesador anti-alucinaciones
+- Reestructuración a Monorepo (v2.0)
+- Inicio de la App Desktop en Flutter
 
-### 🛠️ Fase 1 — Letras Sincronizadas en Terminal (Completado)
-*Consiste en el núcleo funcional del reproductor y el motor básico de transcripción local.*
-- [x] **Transcripción Offline**: Integración nativa de Whisper para procesar audios localmente.
-- [x] **Menú Interactivo (TUI)**: Navegación cómoda con flechas para seleccionar canciones, generar letras o reproducir.
-- [x] **Procesamiento en Lote**: Generación desatendida para múltiples archivos simultáneos.
-- [x] **Post-procesador Anti-alucinaciones**: Limpieza inteligente de fragmentos repetitivos y textos de relleno generados por Whisper.
-- [x] **Soporte Multi-formato**: Compatibilidad con extensiones populares (`.mp3`, `.wav`, `.m4a`, `.flac`, `.mkv`, `.mp4`).
+### 🚧 En desarrollo
+- Mejora y estabilización de la App Desktop
+- Mejoras adicionales de la experiencia CLI
+- Posible modo híbrido (búsqueda de letras online + fallback local)
 
-### 🚀 Fase 1.5 — Mejoras Pro++ (Actual - Completado)
-*Enfoque en optimización del rendimiento, integraciones y funciones profesionales.*
-- [x] **API Local FastAPI**: Creación de un microservicio HTTP local para conectar el motor con aplicaciones externas.
-- [x] **Configuración YAML Centralizada**: Archivo `config.yaml` para personalizar parámetros avanzados del motor y del reproductor.
-- [x] **Forced Alignment (Alineamiento Maestro)**: Sincronización exacta de archivos de audio contra letras de canciones preexistentes en texto plano.
-- [x] **Detección de Secciones Musicales**: Reconocimiento dinámico y etiquetado inteligente de fragmentos instrumentales, coros, intros y outros.
-- [x] **Mapeo de Calidad**: Cálculo y reporte visual de puntuaciones de confianza por segmento transcrito.
-- [x] **FFmpeg Integrado (Bundled)**: Descarga automática de FFmpeg local para evitar dependencias manuales del sistema.
-- [x] **Optimización de IA (v1.4)**: Migración completa a `faster-whisper` (CTranslate2) con soporte para el modelo **Turbo** y cuantización `int8` (CPU) y `float16` (GPU CUDA), acelerando el procesamiento hasta un 800% de forma segura y estable.
+### 🔮 Planeado
+- Empaquetado e instaladores sencillos
+- Más opciones de personalización
+- Posibles versiones web o móvil en el futuro
 
-### 🌐 Fase 2 — Aplicación Web (En planificación)
-*Llevar la potencia de la transcripción local y del alineamiento maestro a una interfaz gráfica de navegador.*
-- [ ] **Generador de Videos**: Subir audios y generar videos con las letras animadas/sincronizadas listos para compartir.
-- [ ] **Repositorio Independiente**: Esta aplicación se desarrollará en un repositorio externo para mantener la modularidad, comunicándose directamente con la API FastAPI local de este proyecto.
+---
 
-### 📱 Fase 3 — Aplicación Móvil (En planificación)
-*Llevar la reproducción y visualización de letras en tiempo real a dispositivos móviles.*
-- [ ] **Reproductor de Música Inteligente**: Aplicación nativa con visualización interactiva de letras sincronizadas estilo karaoke.
-- [ ] **Repositorio Independiente**: Construida de forma aislada, utilizando el motor local como servidor de backend o integrando modelos optimizados en el dispositivo.
+## 📌 Notas importantes de la v2.0
 
+1. Esta versión introduce la **arquitectura monorepo**.
+2. La CLI y el Backend son la parte madura y recomendada para uso diario.
+3. La App Desktop se encuentra en una etapa temprana (UI básica). Se irá mejorando en próximas versiones.
