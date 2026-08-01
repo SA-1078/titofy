@@ -1,0 +1,671 @@
+#!/usr/bin/env python3
+"""
+whisper_transcribe.py — Titofy CMD
+Transcribe un archivo de audio con Whisper local y genera un archivo .lrc.
+
+Uso:
+  python whisper_transcribe.py <audio> [opciones]
+
+Opciones:
+  --output   -o   Nombre del archivo .lrc de salida
+  --model    -m   tiny | base | small | medium | large  (default: small)
+  --language -l   Código de idioma: es, en, pt, fr...   (default: auto)
+  --words         Usar timestamps por PALABRA (más preciso, más líneas)
+"""
+
+import sys
+import os
+
+# Desactivar barras de progreso tqdm internas y warnings de terceros en consola
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import logging
+logging.getLogger("stable_whisper").setLevel(logging.ERROR)
+logging.getLogger("whisper").setLevel(logging.ERROR)
+logging.getLogger("numba").setLevel(logging.ERROR)
+logging.getLogger("ctranslate2").setLevel(logging.ERROR)
+logging.getLogger("torch").setLevel(logging.ERROR)
+
+# Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Gestión de GPU NVIDIA CUDA y carga de DLLs
+# ──────────────────────────────────────────────────────────────────────────────
+from soporte_para_cuda import setup_cuda_dlls, detect_device
+setup_cuda_dlls()
+
+import stable_whisper as whisper
+import torch
+import re
+import argparse
+import subprocess
+import shutil
+import math
+
+ANSI_YELLOW = "\033[33m"
+ANSI_RESET = "\033[0m"
+
+
+def yellow(text: str) -> str:
+    return f"{ANSI_YELLOW}{text}{ANSI_RESET}"
+
+
+def print_yellow(text: str):
+    print(yellow(text))
+
+
+def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
+    """Verifica si el modelo Whisper ya está en la caché local."""
+    try:
+        from lyric_config import get_config
+        cfg = get_config()
+        if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
+            model_name = "large-v3"
+    except Exception:
+        pass
+
+    fw_name = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+    std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+
+    if use_faster:
+        # Check huggingface hub cache for faster-whisper
+        hf_cache = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        fw_folder = f"models--Systran--faster-whisper-{fw_name}"
+        if os.path.exists(os.path.join(hf_cache, fw_folder)):
+            return True
+
+    import importlib
+    download_root = os.getenv(
+        "XDG_CACHE_HOME", 
+        os.path.join(os.path.expanduser("~"), ".cache", "whisper")
+    )
+    
+    try:
+        openai_whisper = importlib.import_module("whisper")
+        url = openai_whisper._MODELS.get(std_name)
+    except Exception:
+        return False
+        
+    if not url:
+        return False
+        
+    expected_filename = url.split("/")[-1]
+    model_path = os.path.join(download_root, expected_filename)
+    return os.path.exists(model_path)
+
+
+def load_whisper_model(model_name: str, device: str, compute_type: str = "auto"):
+    """
+    Carga el modelo Whisper. Prioriza 'faster-whisper' mediante CTranslate2 para máxima
+    velocidad, menor consumo de RAM y soporte de cuantización, con fallback robusto
+    a la librería Whisper estándar de PyTorch si falla o no está disponible.
+    """
+    try:
+        from lyric_config import get_config
+        cfg = get_config()
+        if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
+            model_name = "large-v3"
+    except Exception:
+        pass
+
+    model_name_fw = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+    model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
+
+    try:
+        import stable_whisper
+        
+        # Determinar compute_type adecuado para faster-whisper
+        if compute_type == "auto":
+            selected_compute = "float16" if device == "cuda" else "int8"
+        else:
+            selected_compute = compute_type
+            
+        log.info(f"Intentando cargar faster-whisper ({model_name_fw}) en {device} con compute_type={selected_compute}...")
+        print(f"  ⚡ Usando motor optimizado faster-whisper ({selected_compute})")
+        
+        model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
+        log.info("Carga exitosa con backend faster-whisper")
+        return model, True
+        
+    except Exception as e:
+        log.warning(f"No se pudo cargar con backend faster-whisper: {e}. Reintentando con backend estándar...")
+        print_yellow(f"  ⚠️  No se pudo usar faster-whisper ({e}).")
+        print_yellow("     Usando motor estandar de PyTorch como fallback seguro.")
+
+    try:
+        import stable_whisper as whisper
+        log.info(f"Cargando modelo estándar PyTorch Whisper ({model_name_std}) en {device}...")
+        model = whisper.load_model(model_name_std, device=device)
+        log.info("Carga exitosa con backend estándar PyTorch")
+        return model, False
+    except Exception as e:
+        log.error(f"Error crítico: Ambos fallaron al cargar el modelo {model_name}: {e}")
+        print(f"\n  ❌ Error crítico al cargar el modelo Whisper: {e}", file=sys.stderr)
+        sys.exit(1)
+
+
+def resolve_local_binary(binary_name: str) -> str | None:
+    """Busca ffmpeg/ffprobe en PATH y en bin/ del proyecto."""
+    exe_name = binary_name + (".exe" if os.name == "nt" else "")
+    bundled = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin", exe_name)
+    if os.path.exists(bundled):
+        return bundled
+    return shutil.which(binary_name) or shutil.which(exe_name)
+
+
+def validate_audio_file(audio_path: str) -> float | None:
+    """Valida existencia, tamaño y lectura básica del audio antes de cargar Whisper."""
+    if not os.path.exists(audio_path):
+        log.error(f"No se encontro el archivo: {audio_path}")
+        print(f"\n  ❌ No se encontro el archivo: {audio_path}", file=sys.stderr)
+        print("     Verifica que la ruta sea correcta.\n", file=sys.stderr)
+        sys.exit(1)
+
+    size_bytes = os.path.getsize(audio_path)
+    if size_bytes <= 0:
+        log.error(f"Archivo de audio vacio: {audio_path}")
+        print(f"\n  ❌ El archivo de audio esta vacio: {audio_path}", file=sys.stderr)
+        sys.exit(1)
+
+    ffprobe = resolve_local_binary("ffprobe")
+    if not ffprobe:
+        print_yellow("  ⚠️  ffprobe no esta disponible; se omite la validacion profunda del audio.")
+        return None
+
+    cmd = [
+        ffprobe,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        audio_path,
+    ]
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+    except Exception as exc:
+        print_yellow(f"  ⚠️  No se pudo validar el audio con ffprobe: {exc}")
+        return None
+
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "sin detalle").strip()
+        log.error(f"ffprobe no pudo leer el audio: {detail}")
+        print(f"\n  ❌ ffprobe no pudo leer el archivo de audio.", file=sys.stderr)
+        print(f"     Detalle: {detail}\n", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        duration = float(result.stdout.strip())
+    except ValueError:
+        duration = 0.0
+
+    if duration <= 0:
+        log.error("Duracion de audio invalida o cero")
+        print("\n  ❌ El archivo de audio no tiene duracion valida.\n", file=sys.stderr)
+        sys.exit(1)
+
+    return duration
+
+from logger import get_logger
+from lyric_config import get_config
+
+log = get_logger("whisper")
+
+# Importar post-procesador de letras
+try:
+    # Autoinstalar rapidfuzz si no existe
+    import rapidfuzz
+except ImportError:
+    import subprocess
+    print("  ⚠️  Falta la librería 'rapidfuzz' para el post-procesador.")
+    print("  ⏳ Instalando automáticamente... esto tomará unos segundos.")
+    try:
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "rapidfuzz", "--quiet"])
+        print("  ✅ Instalación de 'rapidfuzz' completada.\n")
+    except Exception as e:
+        print(f"  ❌ Fallo instalando rapidfuzz automáticamente: {e}")
+
+try:
+    from lyrics_postprocess import postprocess_segments
+    HAS_POSTPROCESS = True
+except ImportError:
+    HAS_POSTPROCESS = False
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Prompts optimizados por idioma (positivos, sin negaciones que causen alucinaciones)
+# ──────────────────────────────────────────────────────────────────────────────
+
+INITIAL_PROMPTS = {
+    "es": "Letra de canción en español. Transcripción precisa de la voz cantada.",
+    "en": "Song lyrics in English. Precise transcription of singing voice.",
+    "pt": "Letra de música em português. Transcrição precisa da voz cantada.",
+    "fr": "Paroles de chanson en français. Transcription précise de la voix chantée.",
+    "it": "Testo della canzone in italiano. Trascrizione precisa della voce cantata.",
+    "de": "Songtext auf Deutsch. Präzise Transkription der Gesangsstimme.",
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Utilidades
+# ──────────────────────────────────────────────────────────────────────────────
+
+def to_lrc_timestamp(seconds: float) -> str:
+    """Convierte segundos a formato LRC [MM:SS.xx]"""
+    minutes = int(seconds // 60)
+    secs = seconds % 60
+    return f"{minutes:02d}:{secs:05.2f}"
+
+
+def clean_text(text: str, lang: str = "auto") -> str:
+    """
+    Limpia el texto transcrito:
+    - Normaliza marcadores a "(música)"
+    - Elimina caracteres asiáticos/rusos si el idioma es español/inglés para prevenir alucinaciones de ruido.
+    """
+    # 1. Normalizar etiquetas de música (Whisper suele arrojar [Music], Música, (musica), etc.)
+    music_tags = r"(?i)(\[\s*music\s*\]|\(\s*música\s*\)|\[\s*música\s*\]|\bMúsica\b|\bMusica\b|♪)"
+    text = re.sub(music_tags, "(música)", text)
+
+    # 2. Limpiar texto residual después de etiquetas de música
+    #    "(música) de cierre." → "(música)"
+    #    "(música) instrumental." → "(música)"
+    text = re.sub(
+        r'\(música\)\s*'
+        r'(de\s+cierre|instrumental|de\s+fondo|de\s+salida|de\s+entrada'
+        r'|de\s+intro|de\s+outro|de\s+apertura|de\s+transición'
+        r'|suave|lenta|rápida|alegre|triste)'
+        r'[.!,;]*',
+        '(música)',
+        text,
+        flags=re.IGNORECASE
+    )
+
+    # 2b. Caso genérico: si la línea es SOLO "(música)" + texto muy corto (≤20 chars), simplificar
+    music_residual = re.match(r'^\s*\(música\)\s+(.{1,20})\s*$', text, re.IGNORECASE)
+    if music_residual:
+        residual = music_residual.group(1).strip().rstrip('.')
+        # Si el residual no parece ser letra cantada (muy corto, sin verbos, parece descriptor)
+        residual_words = residual.split()
+        if len(residual_words) <= 3:
+            text = '(música)'
+
+    # 3. Eliminar otras notas extrañas entre corchetes o paréntesis que no sean música (aplausos, etc.)
+    text = re.sub(r"\[(?!\s*música\s*).*?\]", "", text, flags=re.IGNORECASE)
+    
+    # Filtros anti-alucinación por idioma
+    if lang in ["es", "en", "pt", "fr", "it", "de", "auto"]:
+        # Remover puros caracteres chinos/japoneses/coreanos etc (muy comunes en alucinaciones de Cumbia/ruido)
+        # Retiene típicamente caracteres latinos, números y puntuaciones.
+        text = re.sub(r'[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]', '', text)
+
+    # Quitar alucinaciones inducidas por prompts anteriores
+    text = re.sub(r'(?i)no\s*\(música\)\s*instrumental\.?|música\s*instrumental', '', text)
+
+    # Autocorrecciones comunes si es español
+    if lang == "es":
+        text = text.replace("Frankamente", "Francamente").replace("frankamente", "francamente")
+        text = text.replace("ruil", "ruin")
+
+    text = re.sub(r"\s{2,}", " ", text)
+    return text.strip()
+
+
+def split_long_segment(text: str, start: float, end: float, max_chars: int = 60):
+    """
+    Si un segmento es muy largo, lo divide en partes iguales con tiempo interpolado.
+    Esto mejora la sincronización visual cuando Whisper agrupa demasiado texto.
+    """
+    if len(text) <= max_chars:
+        return [(start, text)]
+
+    # Dividir por comas o palabras en el punto medio
+    words = text.split()
+    mid = len(words) // 2
+    part1 = " ".join(words[:mid])
+    part2 = " ".join(words[mid:])
+    mid_time = start + (end - start) / 2
+
+    result = []
+    if part1:
+        result.append((start, part1))
+    if part2:
+        result.append((mid_time, part2))
+    return result
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Generador principal
+# ──────────────────────────────────────────────────────────────────────────────
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Evaluación de calidad
+# ──────────────────────────────────────────────────────────────────────────────
+
+def compute_quality_score(segments: list) -> dict:
+    """
+    Calcula score de calidad 0-100 basado en:
+    - avg_logprob de cada segmento (confianza del modelo)
+    - no_speech_prob (probabilidad de que NO haya voz)
+    """
+    total_confidence = 0
+    total_segments = len(segments)
+    low_confidence = 0
+
+    for seg in segments:
+        logprob = seg.get("avg_logprob", -1.0)
+        no_speech = seg.get("no_speech_prob", 0.0)
+
+        # Convertir logprob a score 0-1 (logprob típico: -0.2 excelente, -1.5 malo)
+        seg_score = min(1.0, max(0.0, 1.0 + logprob))
+
+        # Penalizar si no_speech_prob es alto
+        seg_score *= (1.0 - no_speech)
+
+        total_confidence += seg_score
+        if seg_score < 0.5:
+            low_confidence += 1
+
+    avg_confidence = (total_confidence / max(total_segments, 1)) * 100
+
+    return {
+        "overall_score": round(avg_confidence, 1),
+        "total_segments": total_segments,
+        "low_confidence_segments": low_confidence,
+        "low_confidence_pct": round(low_confidence / max(total_segments, 1) * 100, 1),
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Generador principal
+# ──────────────────────────────────────────────────────────────────────────────
+
+def generate_lrc(
+    audio_path: str,
+    output_path: str,
+    model_name: str = "small",
+    language: str = None,
+    word_mode: bool = False,
+    verbose: bool = False,
+):
+    cfg = get_config()
+
+    # Si se selecciona turbo y use_large_v3_for_pro es True, usar large-v3 completo
+    is_pro_upgraded = False
+    if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
+        model_name = "large-v3"
+        is_pro_upgraded = True
+
+    # ── Header ─────────────────────────────────────────────────────────────────
+    basename = os.path.basename(audio_path)
+    lrc_name = os.path.basename(output_path)
+    lang_display = language if language else "auto"
+
+    term_width = shutil.get_terminal_size((100, 20)).columns
+    inner_width = min(max(term_width - 6, 60), 100)
+
+    print()
+    print("┌" + "─" * (inner_width - 2) + "┐")
+    print("│  MOTOR WHISPER · Transcripción Offline".ljust(inner_width - 1) + "│")
+    print("└" + "─" * (inner_width - 2) + "┘")
+    print()
+
+    duration = validate_audio_file(audio_path)
+    model_display = f"{model_name} ({'SOTA' if model_name in ['turbo', 'large-v3-turbo'] else 'Balanceado'})"
+
+    print(f"  Modelo seleccionado : {model_display}")
+    print(f"  Archivo             : {basename}")
+    if duration:
+        dur_m = int(duration // 60)
+        dur_s = int(duration % 60)
+        print(f"  Duración            : {dur_m}:{dur_s:02d}")
+    print(f"  Idioma              : {lang_display}")
+    print(f"  Salida              : lrc/{lrc_name}")
+    print()
+
+    # ── Detectar dispositivo (GPU/CPU) ─────────────────────────────────────────
+    device, device_name = detect_device()
+    use_fp16 = (device == "cuda")
+
+    if verbose:
+        if device == "cuda":
+            vram_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            print(f"  🚀 GPU       : {device_name} ({vram_mb} MB VRAM)")
+            print(f"  ⚡ Precisión  : FP16 (aceleración GPU)")
+        else:
+            print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
+
+    log.info(f"Iniciando transcripción: {basename} [modelo={model_name}, lang={lang_display}, device={device}]")
+    device_label = "GPU" if device == "cuda" else "CPU"
+    print(f"→ Cargando modelo en {device_label}...")
+    
+    wcfg = cfg.get("whisper", {})
+    compute_type = wcfg.get("compute_type", "auto")
+
+    if not is_model_downloaded(model_name, use_faster=True) and verbose:
+        print(f"  ℹ️  Se descargará el modelo automáticamente, por favor espera...")
+
+    model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+    log.info(f"Modelo '{model_name}' cargado en {device} [{device_name}] (faster={is_faster})")
+
+    # Progress bar callback conectado a real_stdout
+    import time
+    real_stdout = sys.stdout
+    start_time = time.time()
+
+    def progress_callback(seek, total):
+        if total <= 0:
+            return
+        pct = min(100, int((seek / total) * 100))
+        bar_len = 20
+        filled = int((pct / 100.0) * bar_len)
+        bar = "█" * filled + "░" * (bar_len - filled)
+
+        elapsed = time.time() - start_time
+        if pct > 0:
+            total_est = elapsed / (pct / 100.0)
+            rem_sec = max(0, int(total_est - elapsed))
+        else:
+            rem_sec = max(0, int(duration - seek)) if duration else 0
+
+        rem_m = rem_sec // 60
+        rem_s = rem_sec % 60
+        time_str = f"{rem_m}:{rem_s:02d} restantes"
+
+        real_stdout.write(f"\r→ Transcribiendo  {bar}  {pct}%  ·  {time_str}   ")
+        real_stdout.flush()
+
+    # Seleccionar prompt por idioma
+    lang_key = language if language else "es"
+    initial_prompt = INITIAL_PROMPTS.get(lang_key, INITIAL_PROMPTS.get("default", ""))
+
+    transcribe_kwargs = {
+        "verbose": False,
+        "fp16": use_fp16,
+        "word_timestamps": wcfg.get("word_timestamps", True),
+        "condition_on_previous_text": wcfg.get("condition_on_previous_text", False),
+        "vad": wcfg.get("vad", False),
+        "temperature": tuple(wcfg.get("temperature", [0.0, 0.1, 0.2, 0.4])),
+        "initial_prompt": initial_prompt,
+        "no_speech_threshold": wcfg.get("no_speech_threshold", 0.55),
+        "compression_ratio_threshold": wcfg.get("compression_ratio_threshold", 2.8),
+        "beam_size": wcfg.get("beam_size", 8),
+        "progress_callback": progress_callback,
+    }
+
+    if language:
+        transcribe_kwargs["language"] = language
+
+    if is_faster:
+        transcribe_kwargs.pop("fp16", None)
+
+    class SuppressOutput:
+        def __enter__(self):
+            if not verbose:
+                self._stdout = sys.stdout
+                self._stderr = sys.stderr
+                self._null = open(os.devnull, 'w', encoding='utf-8')
+                sys.stdout = self._null
+                sys.stderr = self._null
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if not verbose:
+                sys.stdout = self._stdout
+                sys.stderr = self._stderr
+                self._null.close()
+
+    # stable-ts transcribe
+    with SuppressOutput():
+        result_obj = model.transcribe(audio_path, **transcribe_kwargs)
+        try:
+            result_obj.adjust_by_silence(audio_path, q_levels=20, k_size=5)
+        except Exception:
+            pass
+
+    real_stdout.write("\r" + " " * 80 + "\r")
+    real_stdout.write("✔ Transcripción completada\n")
+    real_stdout.flush()
+
+    result = result_obj.to_dict()
+    segments = result.get("segments", [])
+    detected_lang = result.get("language", "desconocido")
+
+    if not segments:
+        log.error("No se detectó audio con voz en el archivo")
+        print("\n❌ No se detectó audio con voz en el archivo.", file=sys.stderr)
+        sys.exit(1)
+
+    log.info(f"{len(segments)} segmentos transcritos [idioma={detected_lang}]")
+
+    # Evaluación de calidad
+    quality = compute_quality_score(segments)
+    log.info(f"Score de calidad: {quality['overall_score']}% [baja_confianza={quality['low_confidence_pct']}%]")
+
+    # Post-procesamiento
+    for seg in segments:
+        seg["text"] = clean_text(seg.get("text", ""), detected_lang)
+
+    pcfg = cfg.get("postprocess", {})
+    sim_threshold = pcfg.get("similarity_threshold", 85)
+
+    if HAS_POSTPROCESS:
+        segments = postprocess_segments(segments, similarity_threshold=sim_threshold)
+
+    # Detección musical
+    try:
+        from music_detector import classify_sections
+        total_dur = segments[-1].get("end", 0) if segments else 0
+        segments = classify_sections(segments, total_dur)
+    except ImportError:
+        pass
+
+    # Construir líneas LRC
+    title = os.path.splitext(os.path.basename(audio_path))[0]
+    lrc_lines = [
+        f"[ti:{title}]",
+        f"[by:Titofy CMD — Whisper {model_name} | lang:{detected_lang}]",
+        "",
+    ]
+
+    if word_mode:
+        for seg in segments:
+            words = seg.get("words", [])
+            for w in words:
+                text = clean_text(w.get("word", ""), detected_lang)
+                if text:
+                    ts = to_lrc_timestamp(w["start"])
+                    lrc_lines.append(f"[{ts}]{text}")
+    else:
+        for seg in segments:
+            text = seg["text"].strip()
+            if not text:
+                continue
+            parts = split_long_segment(text, seg["start"], seg["end"])
+            for (t, part_text) in parts:
+                ts = to_lrc_timestamp(t)
+                lrc_lines.append(f"[{ts}]{part_text}")
+
+    lrc_content = "\n".join(lrc_lines)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(lrc_content)
+
+    lyric_count = len([l for l in lrc_lines if l.startswith("[") and not l.startswith("[ti") and not l.startswith("[by")])
+    lrc_name = os.path.basename(output_path)
+
+    log.info(f"LRC generado: {lrc_name} [{lyric_count} líneas]")
+
+    # Color sutil al score (Verde >= 80%, Amarillo >= 60%, Rojo < 60%)
+    score_val = quality['overall_score']
+    if score_val >= 80:
+        score_str = f"\033[32m{score_val}%\033[0m"
+    elif score_val >= 60:
+        score_str = f"\033[33m{score_val}%\033[0m"
+    else:
+        score_str = f"\033[31m{score_val}%\033[0m"
+
+    # ── Tarjeta limpia de Resultado ───────────────────────────────────────────
+    print()
+    print("┌" + "─" * (inner_width - 2) + "┐")
+    print("│  RESULTADO".ljust(inner_width - 1) + "│")
+    print("├" + "─" * (inner_width - 2) + "┤")
+    print(f"│  Líneas generadas     : {lyric_count}".ljust(inner_width - 1) + "│")
+    print(f"│  Score de confianza   : {score_str}".ljust(inner_width - 1 + 9) + "│")
+    if quality['low_confidence_segments'] > 0:
+        print(f"│  Segmentos baja conf. : {quality['low_confidence_segments']} ({quality['low_confidence_pct']}%)".ljust(inner_width - 1) + "│")
+    print("│".ljust(inner_width - 1) + "│")
+    print(f"│  Archivo guardado en:".ljust(inner_width - 1) + "│")
+    print(f"│  lrc/{lrc_name}".ljust(inner_width - 1) + "│")
+    print("└" + "─" * (inner_width - 2) + "┘")
+    print()
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Entry point
+# ──────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Titofy CMD — Generador LRC con Whisper local (offline)",
+        formatter_class=argparse.RawTextHelpFormatter
+    )
+    parser.add_argument("audio", help="Ruta al archivo de audio (.mp3, .wav, .m4a, .mp4, etc.)")
+    parser.add_argument("--output", "-o", default=None,
+                        help="Nombre del archivo .lrc de salida (default: mismo nombre que el audio)")
+    parser.add_argument("--model", "-m", default="small",
+                        choices=["base", "small", "turbo"],
+                        help=(
+                            "Modelo Whisper a usar (default: small)\n"
+                            "  turbo  -> lo mejor de lo mejor: gran calidad y velocidad extrema\n"
+                            "  small  -> el bueno: balance recomendado para la mayoría\n"
+                            "  base   -> el rápido: baja precisión, menos recursos"
+                        ))
+    parser.add_argument("--language", "-l", default=None,
+                        help=(
+                            "Forzar idioma (evita errores de detección)\n"
+                            "  es -> Español\n"
+                            "  en -> Inglés\n"
+                            "  pt -> Portugués\n"
+                            "  fr -> Francés\n"
+                            "  (default: auto-detectar)"
+                        ))
+    parser.add_argument("--words", action="store_true",
+                        help="Usar timestamps por PALABRA en lugar de por segmento (más preciso)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Mostrar información técnica de depuración (GPU, VRAM, logs de info)")
+
+    args = parser.parse_args()
+
+    audio_path = args.audio
+    output_path = args.output or (os.path.splitext(os.path.basename(audio_path))[0] + ".lrc")
+
+    generate_lrc(
+        audio_path=audio_path,
+        output_path=output_path,
+        model_name=args.model,
+        language=args.language,
+        word_mode=args.words,
+        verbose=args.verbose,
+    )

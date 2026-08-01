@@ -1,0 +1,41 @@
+api:
+  auto_start: false
+  host: 127.0.0.1
+  port: 8642
+batch:
+  max_workers: 2
+ffmpeg:
+  bundled_path: bin
+  use_bundled: true
+logging:
+  level: INFO
+  log_dir: logs
+  to_file: true
+paths:
+  lrc_output: lrc
+  music_folder: '/home/santiago007/Música'
+postprocess:
+  loop_window: 5
+  max_segment_duration: 30
+  min_chars: 2
+  similarity_threshold: 85
+whisper:
+  adjust_by_silence: true
+  beam_size: 8
+  compression_ratio_threshold: 2.8
+  compute_type: auto
+  condition_on_previous_text: false
+  default_language: es
+  default_model: small
+  no_speech_threshold: 0.55
+  temperature:
+  - 0.0
+  - 0.1
+  - 0.2
+  - 0.4
+  use_large_v3_for_pro: true
+  vad: false
+  word_timestamps: true
+model_check:
+  last_model_check: '2026-07-26'
+  new_models_found: 'ninguno'
