@@ -290,7 +290,10 @@ Los archivos `.lrc` generados o creados manualmente siguen el estándar:
 
 ## 🤝 Licencia
 
-Licencia MIT — Desarrollado por el equipo de **Titofy**.
-
+Este proyecto está bajo la licencia **MIT**.  
+Consulta el archivo [LICENSE](LICENSE) para más detalles.
 ---
-*Titofy v2.1 — De la terminal al escritorio, siempre offline y bajo tu control.*
+*Titofy v2.1 — De la terminal al escritorio, offline y bajo tu control.*
+
+Titofy - Santiago Colimba
+Todos los derechos reservados ©2026.
