@@ -290,10 +290,18 @@ Los archivos `.lrc` generados o creados manualmente siguen el estándar:
 
 ## 🤝 Licencia
 
-Este proyecto está bajo la licencia **MIT**.  
-Consulta el archivo [LICENSE](LICENSE) para más detalles.
+Este proyecto está licenciado bajo la **GNU General Public License v3.0 (GPL-3.0)**.
+
+Eso significa que puedes usar, modificar y distribuir el programa, pero si lo distribuyes debes:
+
+- Dar crédito al autor original
+- Publicar el código fuente de tu versión
+- Mantener la misma licencia GPL
+
+Consulta el archivo [LICENSE](LICENSE) para el texto completo.
+
 ---
 *Titofy v2.1 — De la terminal al escritorio, offline y bajo tu control.*
 
-Titofy - Santiago Colimba
+Titofy - Santiago Colimba.
 Todos los derechos reservados ©2026.
