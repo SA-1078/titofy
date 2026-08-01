@@ -1,5 +1,5 @@
 {
-  "name": "titofy-cmd",
+  "name": "titofy",
   "version": "2.1.0",
   "description": "Reproductor de letras sincronizadas con IA offline + Visualizador ASCII",
   "main": "index.js",

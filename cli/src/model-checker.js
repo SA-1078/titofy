@@ -2,7 +2,7 @@
  * model-checker.js — Verificador de modelos Whisper nuevos
  * 
  * Consulta la API de Hugging Face para detectar si hay modelos
- * faster-whisper más recientes que los soportados por Titofy CMD.
+ * faster-whisper más recientes que los soportados por Titofy.
  * 
  * - Solo consulta una vez cada 7 días (configurable)
  * - Falla silenciosamente si no hay internet
@@ -13,7 +13,7 @@ const https = require("https");
 const fs = require("fs");
 const path = require("path");
 
-// ─── Modelos que Titofy CMD soporta actualmente ────────────────────────────
+// ─── Modelos que Titofy soporta actualmente ────────────────────────────
 const SUPPORTED_MODELS = new Set([
   "faster-whisper-tiny",
   "faster-whisper-tiny.en",

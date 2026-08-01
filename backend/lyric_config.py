@@ -1,5 +1,8 @@
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-lyric_config.py — Titofy CMD
+lyric_config.py — Titofy
 Cargador de configuración centralizada desde config.yaml.
 
 Uso:

@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-soporte_para_cuda.py — Titofy CMD
+soporte_para_cuda.py — Titofy
 Módulo dedicado para la gestión y detección de GPU NVIDIA CUDA y carga de DLLs en Windows.
 """
 

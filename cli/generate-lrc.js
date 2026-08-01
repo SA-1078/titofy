@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 /**
- * generate-lrc.js — Titofy CMD
+ * Titofy — Copyright (C) 2026 Titofy
+ * Licensed under GNU General Public License v3.0 or later.
+ *
+ * generate-lrc.js — Titofy CLI
  * Genera un archivo .lrc sincronizado a partir de un archivo de audio
  * usando Whisper local (100% offline, sin API key).
  *
@@ -25,7 +28,7 @@ const args = process.argv.slice(2);
 
 if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
   console.log(`
-🎵 Titofy CMD — Generador de letras offline con Whisper
+🎵 Titofy CLI — Generador de letras offline con Whisper
 
 Uso:
   node generate-lrc.js <audio> [opciones]

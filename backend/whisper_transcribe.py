@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-whisper_transcribe.py — Titofy CMD
+whisper_transcribe.py — Titofy
 Transcribe un archivo de audio con Whisper local y genera un archivo .lrc.
 
 Uso:
@@ -565,7 +568,7 @@ def generate_lrc(
     title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
-        f"[by:Titofy CMD — Whisper {model_name} | lang:{detected_lang}]",
+        f"[by:Titofy — Whisper {model_name} | lang:{detected_lang}]",
         "",
     ]
 
@@ -628,7 +631,7 @@ def generate_lrc(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Titofy CMD — Generador LRC con Whisper local (offline)",
+        description="Titofy — Generador LRC con Whisper local (offline)",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument("audio", help="Ruta al archivo de audio (.mp3, .wav, .m4a, .mp4, etc.)")

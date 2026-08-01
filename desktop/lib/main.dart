@@ -1,3 +1,6 @@
+// Titofy — Copyright (C) 2026 Titofy
+// Licensed under GNU General Public License v3.0 or later.
+
 import 'package:flutter/material.dart';
 import 'package:media_kit/media_kit.dart';
 import 'package:window_manager/window_manager.dart';

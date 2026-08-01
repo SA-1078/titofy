@@ -1,4 +1,4 @@
-# Titofy CMD - Dependencias de Python
+# Titofy - Dependencias de Python
 # Instalar con: python -m pip install -r requirements.txt
 #
 # Nota:

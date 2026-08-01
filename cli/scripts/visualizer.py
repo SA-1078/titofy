@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-visualizer.py — Visualizador Espectral Animado PRO (Python + sounddevice / rich)
+visualizer.py — Titofy Visualizador Espectral Animado PRO (Python + sounddevice / rich)
 
 Características:
   - Escala logarítmica de frecuencias (30 Hz - 16,000 Hz)

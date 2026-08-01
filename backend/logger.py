@@ -1,5 +1,8 @@
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
 """
-logger.py — Titofy CMD
+logger.py — Titofy
 Sistema de logging profesional con niveles y salida a archivo.
 
 Uso:
@@ -47,7 +50,7 @@ def get_logger(name: str, level: str = None, to_file: bool = None, log_dir: str 
         to_file: Si guardar en archivo. Si None, lee de config.
         log_dir: Directorio de logs. Si None, lee de config.
     """
-    logger = logging.getLogger(f"titofy-cmd.{name}")
+    logger = logging.getLogger(f"titofy.{name}")
 
     # Evitar re-configurar si ya fue configurado
     if name in _configured_loggers:

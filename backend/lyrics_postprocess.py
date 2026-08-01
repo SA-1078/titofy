@@ -1,5 +1,8 @@
-"""
-lyrics_postprocess.py — Titofy CMD
+# Titofy — Copyright (C) 2026 Titofy
+# Licensed under GNU General Public License v3.0 or later.
+
+"""
+lyrics_postprocess.py — Titofy
 Post-procesador inteligente de transcripciones de Whisper.
 
 Corrige problemas comunes:
@@ -622,14 +625,14 @@ if __name__ == "__main__":
     import argparse
     import os
 
-    parser = argparse.ArgumentParser(description="Titofy CMD — Limpiador de transcripciones")
+    parser = argparse.ArgumentParser(description="Titofy — Limpiador de transcripciones")
     parser.add_argument("input", help="Archivo .lrc a limpiar")
     parser.add_argument("--output", "-o", default=None, help="Archivo de salida (default: sobreescribe)")
     parser.add_argument("--threshold", "-t", type=int, default=85,
                         help="Umbral de similitud 0-100 para detectar duplicados (default: 85)")
     args = parser.parse_args()
 
-    print(f"\n🧹 Titofy CMD — Limpiador de letras")
+    print(f"\n🧹 Titofy — Limpiador de letras")
     print(f"{'─' * 45}")
     print(f"📄 Entrada: {args.input}")
 
@@ -642,7 +645,7 @@ if __name__ == "__main__":
 
     output = args.output or args.input
     title = os.path.splitext(os.path.basename(args.input))[0]
-    lrc_content = segments_to_lrc(clean, title, "Titofy CMD — post-procesado")
+    lrc_content = segments_to_lrc(clean, title, "Titofy — post-procesado")
 
     with open(output, "w", encoding="utf-8") as f:
         f.write(lrc_content)

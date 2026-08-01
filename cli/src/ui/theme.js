@@ -40,7 +40,7 @@ function header(subtitle = "IA offline para letras sincronizadas", clearScreen =
   const brand =
     chalk.bold.rgb(255, 132, 31)("TITO") +
     chalk.bold.rgb(255, 202, 58)("FY") +
-    chalk.bold.rgb(38, 198, 218)(" CMD");
+    chalk.bold.rgb(38, 198, 218)(" CLI");
   const glow = chalk.rgb(255, 116, 24)(">>");
   const tag = chalk.rgb(190, 198, 205)(subtitle);
   const rule =
