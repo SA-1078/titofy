@@ -83,7 +83,7 @@ if (!fs.existsSync(audioFile)) {
 }
 
 // ─── Ruta al script Python ────────────────────────────────────────────────────
-const scriptPath = path.join(__dirname, "whisper_transcribe.py");
+const scriptPath = path.join(__dirname, "..", "backend", "whisper_transcribe.py");
 
 if (!fs.existsSync(scriptPath)) {
   console.error("❌ No se encontró whisper_transcribe.py en la carpeta del proyecto.");
@@ -98,6 +98,9 @@ if (!fs.existsSync(lrcDir)) {
 const { execSync } = require("child_process");
 
 function getSystemPath() {
+  if (process.platform !== "win32") {
+    return process.env.PATH;
+  }
   try {
     // Leer el PATH del sistema y del usuario desde el registro de Windows
     const machinePath = execSync(

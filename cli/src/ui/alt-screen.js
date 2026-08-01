@@ -11,7 +11,7 @@ const inquirer = require("inquirer");
 
 // ─── Alternate Screen Buffer ──────────────────────────────────────────────
 function enterAltScreen() {
-  process.stdout.write("\x1b[?1049h\x1b[2J\x1b[H");
+  process.stdout.write("\x1b[?1049h\x1b[H\x1b[J");
 }
 
 function exitAltScreen() {

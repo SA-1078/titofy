@@ -8,7 +8,7 @@
     "menu": "node index.js",
     "play": "node index.js",
     "viz": "node index.js --viz",
-    "api": "python api_server.py",
+    "api": "python ../backend/api_server.py",
     "ffmpeg:install": "node scripts/download-ffmpeg.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

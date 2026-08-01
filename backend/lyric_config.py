@@ -26,6 +26,7 @@ DEFAULTS = {
         "condition_on_previous_text": False,
         "vad": False,
         "adjust_by_silence": True,
+        "use_large_v3_for_pro": False,
     },
     "postprocess": {
         "similarity_threshold": 85,

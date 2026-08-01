@@ -16,41 +16,28 @@ Opciones:
 import sys
 import os
 
+# Desactivar barras de progreso tqdm internas y warnings de terceros en consola
+os.environ["TQDM_DISABLE"] = "1"
+os.environ["PYTHONWARNINGS"] = "ignore"
+
+import warnings
+warnings.filterwarnings("ignore")
+
+import logging
+logging.getLogger("stable_whisper").setLevel(logging.ERROR)
+logging.getLogger("whisper").setLevel(logging.ERROR)
+logging.getLogger("numba").setLevel(logging.ERROR)
+logging.getLogger("ctranslate2").setLevel(logging.ERROR)
+logging.getLogger("torch").setLevel(logging.ERROR)
+
+# Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Solución de Carga de DLLs para Windows CUDA y PyAV (Python 3.8+)
+# Gestión de GPU NVIDIA CUDA y carga de DLLs
 # ──────────────────────────────────────────────────────────────────────────────
-if os.name == "nt":
-    # 1. Obtener la raíz del entorno virtual (.venv)
-    venv_root = os.path.dirname(os.path.dirname(sys.executable))
-    site_packages = os.path.join(venv_root, "Lib", "site-packages")
-
-    if os.path.exists(site_packages):
-        # 2. Agregar paths de bibliotecas nvidia locales de la venv
-        for pkg in ["cublas", "cudnn", "cuda_nvrtc", "cuda_runtime"]:
-            bin_dir = os.path.join(site_packages, "nvidia", pkg, "bin")
-            if os.path.exists(bin_dir):
-                try:
-                    os.add_dll_directory(bin_dir)
-                except Exception:
-                    pass
-
-        # 3. Agregar path de PyAV (av.libs)
-        av_libs = os.path.join(site_packages, "av.libs")
-        if os.path.exists(av_libs):
-            try:
-                os.add_dll_directory(av_libs)
-            except Exception:
-                pass
-
-    # 4. Agregar paths de CUDA en el sistema si existen
-    cuda_path = os.environ.get("CUDA_PATH")
-    if cuda_path:
-        bin_dir = os.path.join(cuda_path, "bin")
-        if os.path.exists(bin_dir):
-            try:
-                os.add_dll_directory(bin_dir)
-            except Exception:
-                pass
+from soporte_para_cuda import setup_cuda_dlls, detect_device
+setup_cuda_dlls()
 
 import stable_whisper as whisper
 import torch
@@ -72,29 +59,16 @@ def print_yellow(text: str):
     print(yellow(text))
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Detección de GPU
-# ──────────────────────────────────────────────────────────────────────────────
-
-def detect_device() -> tuple[str, str]:
-    """
-    Detecta automáticamente si hay GPU CUDA disponible.
-    Returns: (device, device_name)
-      - ("cuda", "NVIDIA GeForce RTX 5070 Laptop GPU") si hay GPU
-      - ("cpu", "CPU") si no hay GPU
-    """
-    try:
-        if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
-            return "cuda", name
-    except Exception as exc:
-        print_yellow(f"  ⚠️  CUDA no se pudo inicializar correctamente: {exc}")
-        print_yellow("     Se usara CPU para continuar sin detener el programa.")
-    return "cpu", "CPU"
-
-
 def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     """Verifica si el modelo Whisper ya está en la caché local."""
+    try:
+        from lyric_config import get_config
+        cfg = get_config()
+        if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
+            model_name = "large-v3"
+    except Exception:
+        pass
+
     fw_name = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
     std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
@@ -131,6 +105,14 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     velocidad, menor consumo de RAM y soporte de cuantización, con fallback robusto
     a la librería Whisper estándar de PyTorch si falla o no está disponible.
     """
+    try:
+        from lyric_config import get_config
+        cfg = get_config()
+        if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
+            model_name = "large-v3"
+    except Exception:
+        pass
+
     model_name_fw = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
     model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
@@ -406,8 +388,15 @@ def generate_lrc(
     model_name: str = "small",
     language: str = None,
     word_mode: bool = False,
+    verbose: bool = False,
 ):
     cfg = get_config()
+
+    # Si se selecciona turbo y use_large_v3_for_pro es True, usar large-v3 completo
+    is_pro_upgraded = False
+    if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
+        model_name = "large-v3"
+        is_pro_upgraded = True
 
     # ── Header ─────────────────────────────────────────────────────────────────
     basename = os.path.basename(audio_path)
@@ -415,63 +404,86 @@ def generate_lrc(
     lang_display = language if language else "auto"
 
     term_width = shutil.get_terminal_size((100, 20)).columns
-    inner_width = min(max(term_width - 6, 60), 140)
+    inner_width = min(max(term_width - 6, 60), 100)
 
     print()
-    print("  ╭" + "─" * (inner_width - 2) + "╮")
-    print("  │  ✨ MOTOR WHISPER IA — TRANSCRIPCION A LRC OFFLINE".ljust(inner_width, ' ') + "│")
-    print("  ╰" + "─" * (inner_width - 2) + "╯")
+    print("┌" + "─" * (inner_width - 2) + "┐")
+    print("│  MOTOR WHISPER · Transcripción Offline".ljust(inner_width - 1) + "│")
+    print("└" + "─" * (inner_width - 2) + "┘")
     print()
-    print(f"  💿 Archivo  : {basename}")
 
     duration = validate_audio_file(audio_path)
-    size_mb = os.path.getsize(audio_path) / (1024 * 1024)
-    print(f"  📦 Tamaño   : {size_mb:.2f} MB")
+    model_display = f"{model_name} ({'SOTA' if model_name in ['turbo', 'large-v3-turbo'] else 'Balanceado'})"
+
+    print(f"  Modelo seleccionado : {model_display}")
+    print(f"  Archivo             : {basename}")
     if duration:
-        print(f"  ⏱️ Duracion : {duration:.2f} s")
-    print(f"  🤖 Modelo   : {model_name}")
-    print(f"  🌐 Idioma   : {lang_display}")
-    print(f"  📂 Salida   : lrc/{lrc_name}")
-    print("  " + "─" * inner_width)
+        dur_m = int(duration // 60)
+        dur_s = int(duration % 60)
+        print(f"  Duración            : {dur_m}:{dur_s:02d}")
+    print(f"  Idioma              : {lang_display}")
+    print(f"  Salida              : lrc/{lrc_name}")
     print()
 
     # ── Detectar dispositivo (GPU/CPU) ─────────────────────────────────────────
     device, device_name = detect_device()
-    use_fp16 = (device == "cuda")  # fp16 solo funciona en GPU
+    use_fp16 = (device == "cuda")
 
-    if device == "cuda":
-        vram_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
-        print(f"  🚀 GPU       : {device_name} ({vram_mb} MB VRAM)")
-        print(f"  ⚡ Precisión  : FP16 (aceleración GPU)")
-    else:
-        print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
-        print_yellow("     Tip: instala PyTorch con CUDA para acelerar 5-10x.")
+    if verbose:
+        if device == "cuda":
+            vram_mb = torch.cuda.get_device_properties(0).total_memory // (1024 * 1024)
+            print(f"  🚀 GPU       : {device_name} ({vram_mb} MB VRAM)")
+            print(f"  ⚡ Precisión  : FP16 (aceleración GPU)")
+        else:
+            print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
 
     log.info(f"Iniciando transcripción: {basename} [modelo={model_name}, lang={lang_display}, device={device}]")
-    print(f"  ⏳ Cargando modelo '{model_name}' en {device.upper()}...")
+    device_label = "GPU" if device == "cuda" else "CPU"
+    print(f"→ Cargando modelo en {device_label}...")
     
     wcfg = cfg.get("whisper", {})
     compute_type = wcfg.get("compute_type", "auto")
 
-    if not is_model_downloaded(model_name, use_faster=True):
-        print(f"     ℹ️  Parece ser la primera vez que usas este modelo. Se descargará automáticamente, espera...")
-    print()
+    if not is_model_downloaded(model_name, use_faster=True) and verbose:
+        print(f"  ℹ️  Se descargará el modelo automáticamente, por favor espera...")
 
     model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
     log.info(f"Modelo '{model_name}' cargado en {device} [{device_name}] (faster={is_faster})")
 
-    print(f"  🔄 Transcribiendo (Corriendo modelo IA seleccionado)... ")
-    print(f"     ⚠️ Esto puede tardar desde segundos hasta minutos dependiendo de tu cpu/gpu, modelo elegido y tamaño del archivo.")
-    print()
+    # Progress bar callback conectado a real_stdout
+    import time
+    real_stdout = sys.stdout
+    start_time = time.time()
 
-    # Seleccionar prompt por idioma (positivo, sin negaciones que causen alucinaciones)
+    def progress_callback(seek, total):
+        if total <= 0:
+            return
+        pct = min(100, int((seek / total) * 100))
+        bar_len = 20
+        filled = int((pct / 100.0) * bar_len)
+        bar = "█" * filled + "░" * (bar_len - filled)
+
+        elapsed = time.time() - start_time
+        if pct > 0:
+            total_est = elapsed / (pct / 100.0)
+            rem_sec = max(0, int(total_est - elapsed))
+        else:
+            rem_sec = max(0, int(duration - seek)) if duration else 0
+
+        rem_m = rem_sec // 60
+        rem_s = rem_sec % 60
+        time_str = f"{rem_m}:{rem_s:02d} restantes"
+
+        real_stdout.write(f"\r→ Transcribiendo  {bar}  {pct}%  ·  {time_str}   ")
+        real_stdout.flush()
+
+    # Seleccionar prompt por idioma
     lang_key = language if language else "es"
     initial_prompt = INITIAL_PROMPTS.get(lang_key, INITIAL_PROMPTS.get("default", ""))
 
-    # Leer parámetros de config.yaml (con fallbacks hardcoded)
     transcribe_kwargs = {
         "verbose": False,
-        "fp16": use_fp16,  # True en GPU (FP16 = 2x más rápido), False en CPU
+        "fp16": use_fp16,
         "word_timestamps": wcfg.get("word_timestamps", True),
         "condition_on_previous_text": wcfg.get("condition_on_previous_text", False),
         "vad": wcfg.get("vad", False),
@@ -480,6 +492,7 @@ def generate_lrc(
         "no_speech_threshold": wcfg.get("no_speech_threshold", 0.55),
         "compression_ratio_threshold": wcfg.get("compression_ratio_threshold", 2.8),
         "beam_size": wcfg.get("beam_size", 8),
+        "progress_callback": progress_callback,
     }
 
     if language:
@@ -488,40 +501,49 @@ def generate_lrc(
     if is_faster:
         transcribe_kwargs.pop("fp16", None)
 
-    # stable-ts devuelve un objeto WhisperResult
-    result_obj = model.transcribe(audio_path, **transcribe_kwargs)
+    class SuppressOutput:
+        def __enter__(self):
+            if not verbose:
+                self._stdout = sys.stdout
+                self._stderr = sys.stderr
+                self._null = open(os.devnull, 'w', encoding='utf-8')
+                sys.stdout = self._null
+                sys.stderr = self._null
 
-    # Post-realineamiento: refinar timestamps contra silencios reales del audio
-    try:
-        result_obj.adjust_by_silence(
-            audio_path,
-            q_levels=20,
-            k_size=5
-        )
-        print("  ✅ Realineamiento por silencios aplicado")
-    except Exception as e:
-        print(f"  ⚠️  Realineamiento por silencios omitido: {e}")
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            if not verbose:
+                sys.stdout = self._stdout
+                sys.stderr = self._stderr
+                self._null.close()
+
+    # stable-ts transcribe
+    with SuppressOutput():
+        result_obj = model.transcribe(audio_path, **transcribe_kwargs)
+        try:
+            result_obj.adjust_by_silence(audio_path, q_levels=20, k_size=5)
+        except Exception:
+            pass
+
+    real_stdout.write("\r" + " " * 80 + "\r")
+    real_stdout.write("✔ Transcripción completada\n")
+    real_stdout.flush()
 
     result = result_obj.to_dict()
-
     segments = result.get("segments", [])
     detected_lang = result.get("language", "desconocido")
 
     if not segments:
         log.error("No se detectó audio con voz en el archivo")
-        print("❌ No se detectó audio con voz en el archivo.", file=sys.stderr)
+        print("\n❌ No se detectó audio con voz en el archivo.", file=sys.stderr)
         sys.exit(1)
 
     log.info(f"{len(segments)} segmentos transcritos [idioma={detected_lang}]")
-    print(f"✅ {len(segments)} segmentos transcritos exitosamente (Alineamiento maestro)")
-    print(f"🌐 Idioma detectado: {detected_lang}")
 
-    # ── Evaluación de calidad ─────────────────────────────────────────────────
+    # Evaluación de calidad
     quality = compute_quality_score(segments)
     log.info(f"Score de calidad: {quality['overall_score']}% [baja_confianza={quality['low_confidence_pct']}%]")
 
-    # ── Post-procesamiento inteligente ────────────────────────────────────────
-    # Limpiar segmentos antes de construir el LRC
+    # Post-procesamiento
     for seg in segments:
         seg["text"] = clean_text(seg.get("text", ""), detected_lang)
 
@@ -530,20 +552,16 @@ def generate_lrc(
 
     if HAS_POSTPROCESS:
         segments = postprocess_segments(segments, similarity_threshold=sim_threshold)
-    else:
-        log.warn("Post-procesador no disponible (falta rapidfuzz)")
-        print("⚠️  Post-procesador no pudo ser cargado (falla al importar rapidfuzz).")
 
-    # ── Detección musical (clasificar secciones) ─────────────────────────────
+    # Detección musical
     try:
         from music_detector import classify_sections
-        # Estimar duración total
         total_dur = segments[-1].get("end", 0) if segments else 0
         segments = classify_sections(segments, total_dur)
     except ImportError:
-        log.warn("music_detector no disponible, secciones no clasificadas")
+        pass
 
-    # ── Construir líneas LRC ──────────────────────────────────────────────────
+    # Construir líneas LRC
     title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
@@ -551,10 +569,7 @@ def generate_lrc(
         "",
     ]
 
-    # Construir lrc: el script decidirá armarlo por palabras o guiarse por segmentos precalculados
-    # para armar el formato final basado en lo que el menú prefiera
     if word_mode:
-        # Modo palabra a palabra
         for seg in segments:
             words = seg.get("words", [])
             for w in words:
@@ -563,13 +578,10 @@ def generate_lrc(
                     ts = to_lrc_timestamp(w["start"])
                     lrc_lines.append(f"[{ts}]{text}")
     else:
-        # Modo segmento
         for seg in segments:
             text = seg["text"].strip()
             if not text:
                 continue
-
-            # Dividir segmentos muy largos para mejor sincronía visual
             parts = split_long_segment(text, seg["start"], seg["end"])
             for (t, part_text) in parts:
                 ts = to_lrc_timestamp(t)
@@ -580,45 +592,34 @@ def generate_lrc(
     with open(output_path, "w", encoding="utf-8") as f:
         f.write(lrc_content)
 
-    # ── Reporte final ─────────────────────────────────────────────────────────
     lyric_count = len([l for l in lrc_lines if l.startswith("[") and not l.startswith("[ti") and not l.startswith("[by")])
     lrc_name = os.path.basename(output_path)
 
-    term_width = shutil.get_terminal_size((100, 20)).columns
-    inner_width = min(max(term_width - 6, 60), 140)
-
     log.info(f"LRC generado: {lrc_name} [{lyric_count} líneas]")
 
-    print()
-    print("  ╭" + "─" * (inner_width - 2) + "╮")
-    print("  │  🎉 MATRIZ LRC GENERADA SATISFACTORIAMENTE".ljust(inner_width, ' ') + "│")
-    print("  ╰" + "─" * (inner_width - 2) + "╯")
-    print(f"   📂 Archivo : lrc/{lrc_name}")
-    print(f"   🎼 Líneas  : {lyric_count} líneas sincronizadas")
-    print()
+    # Color sutil al score (Verde >= 80%, Amarillo >= 60%, Rojo < 60%)
+    score_val = quality['overall_score']
+    if score_val >= 80:
+        score_str = f"\033[32m{score_val}%\033[0m"
+    elif score_val >= 60:
+        score_str = f"\033[33m{score_val}%\033[0m"
+    else:
+        score_str = f"\033[31m{score_val}%\033[0m"
 
-    # ── Reporte de calidad ────────────────────────────────────────────────────
-    score_icon = "🟢" if quality['overall_score'] >= 80 else "🟡" if quality['overall_score'] >= 60 else "🔴"
-    print(f"  ╭─── Reporte de Calidad " + "─" * max(0, inner_width - 28) + "╮")
-    print(f"  │ {score_icon} Score de Confianza  : {quality['overall_score']}%")
-    print(f"  │ 📊 Segmentos totales   : {quality['total_segments']}")
+    # ── Tarjeta limpia de Resultado ───────────────────────────────────────────
+    print()
+    print("┌" + "─" * (inner_width - 2) + "┐")
+    print("│  RESULTADO".ljust(inner_width - 1) + "│")
+    print("├" + "─" * (inner_width - 2) + "┤")
+    print(f"│  Líneas generadas     : {lyric_count}".ljust(inner_width - 1) + "│")
+    print(f"│  Score de confianza   : {score_str}".ljust(inner_width - 1 + 9) + "│")
     if quality['low_confidence_segments'] > 0:
-        print(f"  │ ⚠️  Baja confianza     : {quality['low_confidence_segments']} ({quality['low_confidence_pct']}%)")
-    print(f"  ╰" + "─" * (inner_width) + "╯")
+        print(f"│  Segmentos baja conf. : {quality['low_confidence_segments']} ({quality['low_confidence_pct']}%)".ljust(inner_width - 1) + "│")
+    print("│".ljust(inner_width - 1) + "│")
+    print(f"│  Archivo guardado en:".ljust(inner_width - 1) + "│")
+    print(f"│  lrc/{lrc_name}".ljust(inner_width - 1) + "│")
+    print("└" + "─" * (inner_width - 2) + "┘")
     print()
-
-    print(f"   📋 Resumen (primeras 8 líneas ancladas):")
-    print("  " + "─" * inner_width)
-    count = 0
-    for line in lrc_lines:
-        if line.startswith("[") and not line.startswith("[ti") and not line.startswith("[by"):
-            print(f"     {line}")
-            count += 1
-            if count >= 8:
-                if lyric_count > 8:
-                    print(f"     ... y {lyric_count - 8} líneas más")
-                break
-    print("  " + "─" * inner_width)
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -652,6 +653,8 @@ if __name__ == "__main__":
                         ))
     parser.add_argument("--words", action="store_true",
                         help="Usar timestamps por PALABRA en lugar de por segmento (más preciso)")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Mostrar información técnica de depuración (GPU, VRAM, logs de info)")
 
     args = parser.parse_args()
 
@@ -664,4 +667,5 @@ if __name__ == "__main__":
         model_name=args.model,
         language=args.language,
         word_mode=args.words,
+        verbose=args.verbose,
     )

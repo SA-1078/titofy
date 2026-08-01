@@ -99,6 +99,10 @@ function mix(a, b, t) {
   return Math.round(a + (b - a) * clamp(t));
 }
 
+function mixFloat(a, b, t) {
+  return a + (b - a) * clamp(t);
+}
+
 function resampleHeights(values, targetLength) {
   if (!values.length || targetLength <= 0) return [];
   if (values.length === targetLength) return values;
@@ -112,7 +116,7 @@ function resampleHeights(values, targetLength) {
     const left = Math.floor(pos);
     const right = Math.min(values.length - 1, left + 1);
     const t = pos - left;
-    result.push(mix(values[left], values[right], t));
+    result.push(mixFloat(values[left], values[right], t));
   }
 
   return result;
@@ -197,17 +201,16 @@ function renderSpectrum(state) {
   const gradient = buildGradientTable(effectiveHeight, beat.colorShift || 0);
 
   // ─── Beat intensity para pulse visual ──────────────────────
-  // intensity decae suavemente (viene del beat-detector)
   const beatIntensity = clamp(beat.intensity || 0);
 
-  // ─── Construir barras del espectro ─────────────────────────
+  // ─── Construir alturas flotantes del espectro ─────────────
   const bassLimit = Math.ceil(bands.length * 0.3);
-  const bassPulse = beat.bassBeat ? cfg.BEAT_HEIGHT_BOOST : 1;
+  const bassPulse = beat.bassBeat ? (cfg.BEAT_HEIGHT_BOOST || 1.15) : 1;
   const barHeights = bands.map((v, i) => {
     const boosted = i < bassLimit ? v * bassPulse : v;
-    return Math.round(clamp(boosted) * effectiveHeight);
+    return clamp(boosted) * effectiveHeight;
   });
-  const peakHeights = peaks.map((v) => Math.round(clamp(v) * effectiveHeight));
+  const peakHeights = peaks.map((v) => clamp(v) * effectiveHeight);
 
   // ─── Simetría perfecta (sin hueco central) ────────────────
   let displayBars = barHeights;
@@ -221,7 +224,7 @@ function renderSpectrum(state) {
     displayPeaks = [...leftPeaks, ...rightPeaks];
   }
 
-  // Estirar el espectro para ocupar mas ancho sin crecer en vertical.
+  // Estirar el espectro para ocupar más ancho sin crecer en vertical.
   const maxSpectrumWidth = Math.max(20, termWidth - 8);
   const targetSpectrumWidth = Math.max(
     20,
@@ -234,6 +237,9 @@ function renderSpectrum(state) {
   const spectrumWidth = displayBars.length;
   const padLeft = Math.max(0, Math.floor((termWidth - spectrumWidth) / 2));
   const padding = " ".repeat(padLeft);
+
+  const subBlocks = cfg.BAR_CHARS.SUB_BLOCKS || [" ", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
+  const peakChar = cfg.BAR_CHARS.PEAK || "▀";
 
   // Helper: ¿es columna de bajos? (para pulse visual)
   const isBassColumn = (col) => cfg.SYMMETRIC
@@ -250,33 +256,29 @@ function renderSpectrum(state) {
   lines.push(hp + chalk.cyan("╚" + "═".repeat(innerWidth) + "╝"));
   lines.push("");
 
-  // ─── Espectro (dibujado de arriba hacia abajo) ─────────────
+  // ─── Espectro (dibujado de arriba hacia abajo con Sub-Blocks Unicode) ─────────────
   for (let row = effectiveHeight - 1; row >= 0; row--) {
     let rowStr = padding;
     const color = gradient[row];
 
     for (let col = 0; col < spectrumWidth; col++) {
-      const height = displayBars[col];
-      const peak = displayPeaks[col];
+      const floatHeight = displayBars[col];
+      const peakFloat = displayPeaks[col];
 
-      if (row < height) {
-        // ── Barra sólida ──────────────────────────────────
-        if (beat.bassBeat && isBassColumn(col)) {
-          // Mejora 5: Beat pulse — iluminar gradiente (no blanco puro)
-          // Mezclar color del gradiente hacia blanco según intensidad
-          const pulseAmount = Math.round(90 + 60 * beatIntensity);
-          const bc = brighten(color, pulseAmount);
-          rowStr += chalk.bold.rgb(bc.r, bc.g, bc.b)(cfg.BAR_CHARS.FULL);
-        } else {
-          rowStr += chalk.rgb(color.r, color.g, color.b)(cfg.BAR_CHARS.FULL);
-        }
-      } else if (peak > 0 && row === Math.max(0, peak - 1)) {
-        // ── Mejora 3: Peak indicator más visible ──────────
-        // Más brillante que la barra, con bold para resaltar
-        const pr = Math.min(255, color.r + 90);
-        const pg = Math.min(255, color.g + 90);
-        const pb = Math.min(255, color.b + 90);
-        rowStr += chalk.bold.rgb(pr, pg, pb)(cfg.BAR_CHARS.PEAK);
+      const fullRowThreshold = row + 1;
+      const rowFloor = row;
+
+      if (floatHeight >= fullRowThreshold) {
+        // ── Barra sólida de bloque entero ────────────────
+        rowStr += chalk.rgb(color.r, color.g, color.b)(subBlocks[7]);
+      } else if (floatHeight > rowFloor) {
+        // ── Sub-block de alta resolución vertical (8 niveles) ──
+        const frac = floatHeight - rowFloor;
+        const subIndex = Math.min(7, Math.max(1, Math.floor(frac * 8)));
+        rowStr += chalk.rgb(color.r, color.g, color.b)(subBlocks[subIndex]);
+      } else if (peakFloat > floatHeight + 0.1 && Math.floor(peakFloat) === row) {
+        // ── Peak Hold (marcador flotante blanco solo por encima de la barra) ─────────
+        rowStr += chalk.bold.rgb(255, 255, 255)(peakChar);
       } else {
         rowStr += " ";
       }

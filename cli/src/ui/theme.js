@@ -29,14 +29,13 @@ function fitLine(text, max) {
 }
 
 function clear() {
-  // \x1b[2J = limpiar pantalla
-  // \x1b[3J = limpiar scrollback buffer (critico para que inquirer no entre al historial)
-  // \x1b[H  = cursor al origen (0,0)
-  process.stdout.write("\x1b[2J\x1b[3J\x1b[H");
+  process.stdout.write("\x1b[H\x1b[J");
 }
 
-function header(subtitle = "IA offline para letras sincronizadas") {
-  clear();
+function header(subtitle = "IA offline para letras sincronizadas", clearScreen = false) {
+  if (clearScreen) {
+    clear();
+  }
   const w = width();
   const brand =
     chalk.bold.rgb(255, 132, 31)("TITO") +

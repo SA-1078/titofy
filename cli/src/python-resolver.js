@@ -22,13 +22,18 @@ function resolvePython(extraEnv = {}) {
   if (cachedPython) return cachedPython;
 
   const env = { ...process.env, ...extraEnv };
-  const root = path.join(__dirname, "..");
+  const cliRoot = path.join(__dirname, "..");
+  const projectRoot = path.join(__dirname, "..", "..");
   const candidates = [
     process.env.PYTHON,
-    path.join(root, ".venv", "Scripts", "python.exe"),
-    path.join(root, "venv", "Scripts", "python.exe"),
-    path.join(root, ".venv", "bin", "python"),
-    path.join(root, "venv", "bin", "python"),
+    path.join(projectRoot, "backend", ".venv", "Scripts", "python.exe"),
+    path.join(projectRoot, "backend", ".venv", "bin", "python"),
+    path.join(projectRoot, "backend", "venv", "Scripts", "python.exe"),
+    path.join(projectRoot, "backend", "venv", "bin", "python"),
+    path.join(cliRoot, ".venv", "Scripts", "python.exe"),
+    path.join(cliRoot, ".venv", "bin", "python"),
+    path.join(cliRoot, "venv", "Scripts", "python.exe"),
+    path.join(cliRoot, "venv", "bin", "python"),
     "python",
     "py",
     "python3",

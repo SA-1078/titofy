@@ -153,31 +153,39 @@ class SpectrumAnalyzer extends EventEmitter {
     }
     const rawBands = this._groupIntoBands(magnitudes, this._bandMap);
 
-    // 5. Convertir a dB, normalizar a [0, 1], con bass boost SOLO en bandas graves
+    // 5. Convertir a dB con epsilon, normalizar a rango dinámico [-48dB, -8dB] y procesar de forma diferenciada
+    const bassLimit = Math.floor(numBands * (cfg.BASS_BARS_RATIO || 0.25));
+    const eps = 1e-6;
+
     const normalizedBands = rawBands.map((val, i) => {
-      if (val <= 0) return 0;
-      const db = 20 * Math.log10(val);
-      let value = (db - cfg.MIN_DB) / (cfg.MAX_DB - cfg.MIN_DB);
-      value = clamp01(value);
+      const isBass = i < bassLimit;
 
-      value = Math.pow(value, cfg.BASS_POWER || 1);
+      // Convertir magnitud a dB
+      const db = 20 * Math.log10(val + eps);
 
-      const bandRatio = numBands > 1 ? i / (numBands - 1) : 0;
-      value *= 1 + bandRatio * (cfg.HIGH_BAND_BOOST || 0);
+      // Normalizar por rango dinámico [-48 dB, -8 dB]
+      let norm = (db - cfg.MIN_DB) / (cfg.MAX_DB - cfg.MIN_DB);
+      norm = clamp01(norm);
 
-      // Bass boost: SOLO primeras 30% de bandas (no todas)
-      if (i < numBands * 0.3) {
-        value *= cfg.BASS_BOOST;
+      if (isBass) {
+        // === GRAVES ===
+        norm *= cfg.BASS_GAIN || 1.05;
+        norm = Math.pow(norm, cfg.BASS_POWER || 1.25);
+        norm = Math.min(norm, cfg.BASS_MAX_CEILING || 0.92);
+      } else {
+        // === MEDIOS Y AGUDOS ===
+        const bandRatio = (i - bassLimit) / Math.max(1, numBands - bassLimit);
+        norm *= 1 + bandRatio * (cfg.HIGH_BAND_BOOST || 0.35);
       }
 
-      return clamp01(value);
+      return clamp01(norm);
     });
 
-    // 6. Suavizado + Decay + Anti-spike
-    const smoothed = this._applySmoothing(normalizedBands, numBands);
+    // 6. Suavizado diferenciado + Attack/Decay
+    const smoothed = this._applySmoothing(normalizedBands, numBands, bassLimit);
 
-    // 7. Actualizar picos
-    this._updatePeaks(smoothed, numBands);
+    // 7. Actualizar picos diferenciados
+    this._updatePeaks(smoothed, numBands, bassLimit);
 
     // 8. Emitir datos del espectro
     this.emit("spectrum", {
@@ -204,17 +212,22 @@ class SpectrumAnalyzer extends EventEmitter {
    */
   _createLogBandMap(numBins, numBands) {
     const map = [];
-    const minFreq = 20;     // Hz mínimo audible
-    const maxFreq = cfg.SAMPLE_RATE / 2; // Nyquist
-    const logMin = Math.log10(minFreq);
-    const logMax = Math.log10(maxFreq);
+    const minFreq = 30;     // 30 Hz graves (siempre a la izquierda)
+    const maxFreq = 16000;  // 16 kHz agudos (siempre a la derecha)
+    const nyquist = cfg.SAMPLE_RATE / 2;
 
     for (let i = 0; i < numBands; i++) {
-      const freqLow = Math.pow(10, logMin + (logMax - logMin) * (i / numBands));
-      const freqHigh = Math.pow(10, logMin + (logMax - logMin) * ((i + 1) / numBands));
+      const tLow = Math.pow(i / numBands, 0.85);
+      const tHigh = Math.pow((i + 1) / numBands, 0.85);
 
-      const binLow = Math.max(0, Math.floor(freqLow * numBins * 2 / cfg.SAMPLE_RATE));
-      const binHigh = Math.min(numBins - 1, Math.floor(freqHigh * numBins * 2 / cfg.SAMPLE_RATE));
+      const freqLow = minFreq * Math.pow(maxFreq / minFreq, tLow);
+      const freqHigh = minFreq * Math.pow(maxFreq / minFreq, tHigh);
+
+      let binLow = Math.floor((freqLow / nyquist) * numBins);
+      let binHigh = Math.floor((freqHigh / nyquist) * numBins);
+
+      binLow = Math.max(0, Math.min(numBins - 1, binLow));
+      binHigh = Math.max(binLow, Math.min(numBins - 1, binHigh));
 
       map.push({ binLow, binHigh, freqLow, freqHigh });
     }
@@ -224,60 +237,95 @@ class SpectrumAnalyzer extends EventEmitter {
   }
 
   /**
-   * Agrupa bins FFT en bandas según el mapeo logarítmico.
+   * Agrupa bins FFT en bandas: 75% MAX + 25% AVG en graves (punch + forma orgánica) y MEAN en medios/agudos.
    */
   _groupIntoBands(magnitudes, bandMap) {
     const bands = new Float64Array(bandMap.numBands);
+    const bassLimit = Math.floor(bandMap.numBands * (cfg.BASS_BARS_RATIO || 0.30));
 
     for (let i = 0; i < bandMap.numBands; i++) {
       const { binLow, binHigh } = bandMap[i];
-      let sum = 0;
-      let count = 0;
+      const isBass = i < bassLimit;
 
-      for (let b = binLow; b <= binHigh; b++) {
-        if (b < magnitudes.length) {
-          sum += magnitudes[b];
-          count++;
+      if (isBass) {
+        // Graves: Combina 75% MAX (punch) + 25% AVG (forma orgánica)
+        let maxVal = 0;
+        let sum = 0;
+        let count = 0;
+        for (let b = binLow; b <= binHigh; b++) {
+          if (b < magnitudes.length) {
+            const val = magnitudes[b];
+            if (val > maxVal) maxVal = val;
+            sum += val;
+            count++;
+          }
         }
+        const avgVal = count > 0 ? sum / count : 0;
+        const maxW = cfg.BASS_MAX_WEIGHT || 0.75;
+        const avgW = cfg.BASS_AVG_WEIGHT || 0.25;
+        bands[i] = maxVal * maxW + avgVal * avgW;
+      } else {
+        // Medios y agudos: promedio (mean)
+        let sum = 0;
+        let count = 0;
+        for (let b = binLow; b <= binHigh; b++) {
+          if (b < magnitudes.length) {
+            sum += magnitudes[b];
+            count++;
+          }
+        }
+        bands[i] = count > 0 ? sum / count : 0;
       }
-
-      bands[i] = count > 0 ? sum / count : 0;
     }
 
     return bands;
   }
 
   /**
-   * Aplica suavizado directo + anti-spike.
-   * SIN doble amortiguamiento — física directa para movimiento fluido.
-   *
-   * Subida: salto limitado por MAX_DELTA, escalado por ATTACK_RATE
-   * Bajada: EMA puro (SMOOTHING) con floor lineal (DECAY_RATE)
+   * Aplica física de audio diferenciada + Difusión Lateral en graves:
+   *  - Graves: caída rápida (BASS_DECAY = 0.68) + difusión horizontal (BASS_DIFFUSION = 0.22).
+   *  - Medios y agudos: movimiento fluido de ola (ATTACK = 0.97, DECAY = 0.72).
    */
-  _applySmoothing(current, numBands) {
+  _applySmoothing(current, numBands, bassLimit) {
     if (!this.prevBands || this.prevBands.length !== numBands) {
       this.prevBands = new Float64Array(numBands);
     }
 
     const result = new Float64Array(numBands);
-    const decayStep = cfg.DECAY_RATE / cfg.MAX_HEIGHT;
 
+    const bassAttack = cfg.BASS_ATTACK || 0.90;
+    const bassDecay = cfg.BASS_DECAY || 0.68;
+    const restAttack = cfg.ATTACK_RATE || 0.97;
+    const restDecay = cfg.DECAY || 0.72;
+
+    // 1. Attack / Decay vertical por banda
     for (let i = 0; i < numBands; i++) {
       const prev = this.prevBands[i];
       const curr = current[i];
+      const isBass = i < bassLimit;
+
+      const attack = isBass ? bassAttack : restAttack;
+      const decay = isBass ? bassDecay : restDecay;
 
       if (curr > prev) {
-        // ── Subida: directa, anti-spike limitada ──────────
-        const delta = Math.min(curr - prev, cfg.MAX_DELTA);
-        result[i] = prev + delta * cfg.ATTACK_RATE;
+        result[i] = curr * attack + prev * (1 - attack);
       } else {
-        // ── Bajada: EMA suave con floor lineal ────────────
-        const smoothed = cfg.SMOOTHING * prev + (1 - cfg.SMOOTHING) * curr;
-        const decayed = prev - decayStep;
-        result[i] = Math.max(0, Math.min(smoothed, decayed));
+        result[i] = prev * decay + curr * (1 - decay);
       }
 
       result[i] = clamp01(result[i]);
+      this.prevBands[i] = result[i];
+    }
+
+    // 2. Difusión lateral (suavizado horizontal) SOLO en la zona de graves
+    const diffusion = cfg.BASS_DIFFUSION || 0.22;
+    for (let i = 1; i < bassLimit - 1; i++) {
+      const left = this.prevBands[i - 1];
+      const right = this.prevBands[i + 1];
+      const center = this.prevBands[i];
+
+      const diffVal = center * (1 - diffusion) + (left + right) * 0.5 * diffusion;
+      result[i] = clamp01(diffVal);
       this.prevBands[i] = result[i];
     }
 
@@ -285,25 +333,30 @@ class SpectrumAnalyzer extends EventEmitter {
   }
 
   /**
-   * Actualiza indicadores de pico.
+   * Actualiza indicadores de pico con Peak Hold diferenciado (4 frames en graves vs 8 en medios/agudos).
    */
-  _updatePeaks(bands, numBands) {
+  _updatePeaks(bands, numBands, bassLimit) {
     if (!this.peakBands || this.peakBands.length !== numBands) {
       this.peakBands = new Float64Array(numBands);
       this.peakHold = new Int32Array(numBands);
     }
 
-    const peakDecayStep = cfg.PEAK_DECAY_RATE / cfg.MAX_HEIGHT;
+    const peakHoldBass = cfg.PEAK_HOLD_BASS_FRAMES || 4;
+    const peakHoldRest = cfg.PEAK_HOLD_FRAMES || 8;
+    const peakDecay = cfg.PEAK_DECAY || 0.88;
 
     for (let i = 0; i < numBands; i++) {
       const current = bands[i];
+      const isBass = i < bassLimit;
+      const holdFrames = isBass ? peakHoldBass : peakHoldRest;
+
       if (current >= this.peakBands[i]) {
         this.peakBands[i] = current;
-        this.peakHold[i] = cfg.PEAK_HOLD_FRAMES;
+        this.peakHold[i] = holdFrames;
       } else if (this.peakHold[i] > 0) {
         this.peakHold[i]--;
       } else {
-        this.peakBands[i] = Math.max(current, this.peakBands[i] - peakDecayStep);
+        this.peakBands[i] = Math.max(current, this.peakBands[i] * peakDecay);
       }
     }
   }

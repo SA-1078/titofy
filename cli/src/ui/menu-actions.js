@@ -52,9 +52,9 @@ function renderTrackHeader(audioPath) {
 
 function modelChoices(backValue = "__back__") {
   return [
-    ui.actionChoice("turbo", "Turbo (SOTA) - Lo mejor (Calidad Pro y rapido)", "turbo", "ok"),
-    ui.actionChoice("small", "Small - El bueno (Calidad media, balanceado)", "small", "info"),
-    ui.actionChoice("base", "Base - El rapido (Baja precision, menos recursos)", "base", "muted"),
+    ui.actionChoice("turbo", "turbo   · Lo mejor (calidad profesional + velocidad)", "turbo", "ok"),
+    ui.actionChoice("small", "small   · Balance ideal para la mayoria de canciones", "small", "info"),
+    ui.actionChoice("base", "base    · Rapido (equipos lentos)", "base", "muted"),
     ui.separator(),
     ui.actionChoice("Volver", "Regresar sin cambios", backValue, "muted"),
   ];
@@ -63,9 +63,9 @@ function modelChoices(backValue = "__back__") {
 async function chooseModel(title = "Modelo de transcripcion") {
   ui.header(title);
   ui.box("Guia de modelos", [
-    ui.kv("turbo", "Lo mejor de lo mejor: calidad profesional y velocidad extrema"),
-    ui.kv("small", "El bueno: excelente balance para la mayoria de canciones"),
-    ui.kv("base", "El rapido: menor precision, ideal para equipos antiguos o lentos"),
+    ui.kv("turbo", "Lo mejor (calidad profesional + velocidad)"),
+    ui.kv("small", "Balance ideal para la mayoria de canciones"),
+    ui.kv("base", "Rapido (equipos lentos)"),
   ]);
   ui.footer();
 
@@ -89,25 +89,20 @@ async function generateLrc(audioPath, model = "small", language = "es") {
   const lrcPath = getLrcPath(audioPath);
   const api = new LyricSyncAPI();
 
-  ui.notice("Transcripcion", `Generando letras con modelo '${model}'...`, "info");
-
   if (await api.isRunning()) {
-    ui.notice("Modo API", "Usando el servicio local de LyricSync.", "info");
     try {
       const { task_id } = await api.transcribe(audioPath, model, language);
-      const result = await api.waitForCompletion(task_id, (status, progress) => {
-        process.stdout.write(`\r  ${chalk.cyan("Estado")} ${status.padEnd(12)} ${String(progress).padStart(3)}%   `);
+      await api.waitForCompletion(task_id, (status, progress) => {
+        const pct = String(progress).padStart(3);
+        process.stdout.write(`\r  → Transcribiendo... [${pct}%]`);
       });
-      void result;
       process.stdout.write("\n");
-      ui.notice("Letras generadas", `Guardado en lrc/${path.basename(lrcPath)}`, "ok");
-      return true;
     } catch (err) {
       ui.notice("Fallback de API", err.message, "warn");
     }
   }
 
-  const scriptPath = path.join(__dirname, "..", "..", "whisper_transcribe.py");
+  const scriptPath = path.join(__dirname, "..", "..", "..", "backend", "whisper_transcribe.py");
   const pythonBin = resolvePython(SYSTEM_ENV);
 
   if (!pythonBin) {
@@ -115,7 +110,7 @@ async function generateLrc(audioPath, model = "small", language = "es") {
     return false;
   }
 
-  return new Promise((resolve) => {
+  const success = await new Promise((resolve) => {
     const proc = spawn(
       pythonBin,
       [scriptPath, audioPath, "--output", lrcPath, "--model", model, "--language", language],
@@ -123,11 +118,6 @@ async function generateLrc(audioPath, model = "small", language = "es") {
     );
 
     proc.on("close", (code) => {
-      if (code === 0) {
-        ui.notice("Letras generadas", `Guardado en lrc/${path.basename(lrcPath)}`, "ok");
-      } else {
-        ui.notice("Transcripcion fallida", `Python salio con codigo ${code}. Prueba un modelo mas pequeno o verifica el audio.`, "danger");
-      }
       resolve(code === 0);
     });
 
@@ -136,6 +126,33 @@ async function generateLrc(audioPath, model = "small", language = "es") {
       resolve(false);
     });
   });
+
+  if (success && fs.existsSync(lrcPath)) {
+    const { showLyrics } = await prompt([{
+      type: "confirm",
+      name: "showLyrics",
+      message: "¿Deseas ver el resumen de letras?",
+      default: false,
+    }]);
+
+    if (showLyrics) {
+      const lines = fs.readFileSync(lrcPath, "utf-8")
+        .split(/\r?\n/)
+        .filter((l) => l.startsWith("[") && !l.startsWith("[ti") && !l.startsWith("[by"));
+
+      console.log("\n  📋 Resumen de letras:");
+      console.log(chalk.gray("  " + "─".repeat(56)));
+      lines.slice(0, 8).forEach((line) => {
+        console.log(`     ${chalk.cyan(line.slice(0, 10))} ${line.slice(10)}`);
+      });
+      if (lines.length > 8) {
+        console.log(chalk.gray(`     ... y ${lines.length - 8} líneas más`));
+      }
+      console.log(chalk.gray("  " + "─".repeat(56)) + "\n");
+    }
+  }
+
+  return success;
 }
 
 async function alignLyrics(audioPath) {
@@ -199,7 +216,7 @@ async function alignLyrics(audioPath) {
 
   ui.notice("Alineacion", `Sincronizando ${lyricsText.split(/\r?\n/).length} linea(s)...`, "info");
 
-  const scriptPath = path.join(__dirname, "..", "..", "whisper_align.py");
+  const scriptPath = path.join(__dirname, "..", "..", "..", "backend", "whisper_align.py");
   const tempTxt = path.join(__dirname, "..", "..", "_temp_lyrics.txt");
   fs.writeFileSync(tempTxt, lyricsText, "utf-8");
   const pythonBin = resolvePython(SYSTEM_ENV);

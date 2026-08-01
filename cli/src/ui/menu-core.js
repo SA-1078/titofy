@@ -8,18 +8,26 @@ const {
   scanFolder,
   hasLrc,
   DEFAULT_MUSIC_FOLDER,
+  loadSavedMusicFolder,
+  saveMusicFolder,
 } = require("../config");
 
 const { songActionMenu, batchGenerateMenu, pause } = require("./menu-actions");
+const { checkForNewModels } = require("../model-checker");
 
 // ──────────────────────────────────────────────────────────────────────────
 
-function renderLibraryHeader(folderPath, total, synced) {
+function renderLibraryHeader(folderPath, total, synced, newModelsBanner) {
   ui.header();
-  ui.box("Biblioteca", [
+  const rows = [
     ui.kv("Carpeta", ui.clip(folderPath, ui.width() - 18)),
     `${ui.kv("Pistas", String(total).padEnd(4))}  ${chalk.green(`Con letras ${String(synced).padEnd(4)}`)}  ${chalk.yellow(`Pendientes ${total - synced}`)}`,
-  ]);
+  ];
+  if (newModelsBanner && newModelsBanner.length > 0) {
+    const modelNames = newModelsBanner.map((m) => m.replace("faster-whisper-", "")).join(", ");
+    rows.push(chalk.cyan(`⚡ Nuevo modelo disponible: ${modelNames}`));
+  }
+  ui.box("Biblioteca", rows);
   ui.footer();
 }
 
@@ -41,10 +49,12 @@ async function chooseFolderMenu(currentFolder) {
     return currentFolder;
   }
 
+  // Guardar la carpeta elegida para futuras sesiones
+  saveMusicFolder(folderPath);
   return folderPath;
 }
 
-async function songListMenu(folderPath) {
+async function songListMenu(folderPath, newModelsBanner) {
   const audioFiles = scanFolder(folderPath);
 
   enterAltScreen();
@@ -75,7 +85,7 @@ async function songListMenu(folderPath) {
   ];
 
   const selected = await customList(
-    () => renderLibraryHeader(folderPath, audioFiles.length, synced),
+    () => renderLibraryHeader(folderPath, audioFiles.length, synced, newModelsBanner),
     choices,
     "Selecciona una pista"
   );
@@ -97,14 +107,24 @@ async function startMenuLoop() {
   const folderArgIndex = process.argv.indexOf("--folder");
   let currentFolder = folderArgIndex !== -1 && process.argv[folderArgIndex + 1]
     ? process.argv[folderArgIndex + 1]
-    : DEFAULT_MUSIC_FOLDER;
+    : (loadSavedMusicFolder() || DEFAULT_MUSIC_FOLDER);
+
+  // Verificar modelos nuevos en segundo plano (no bloquea el inicio)
+  let newModelsBanner = null;
+  checkForNewModels()
+    .then((newModels) => {
+      if (newModels.length > 0) {
+        newModelsBanner = newModels;
+      }
+    })
+    .catch(() => {}); // silencioso si falla
 
   enterAltScreen();
   process.on("exit", exitAltScreen);
   process.on("SIGINT", () => { exitAltScreen(); process.exit(0); });
 
   while (true) {
-    const result = await songListMenu(currentFolder);
+    const result = await songListMenu(currentFolder, newModelsBanner);
 
     if (result === null) {
       exitAltScreen();

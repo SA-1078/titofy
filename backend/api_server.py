@@ -18,6 +18,10 @@ Endpoints:
 
 import os
 import sys
+
+# Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 import uuid
 import time
 import threading

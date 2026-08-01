@@ -85,23 +85,26 @@ def get_logger(name: str, level: str = None, to_file: bool = None, log_dir: str 
         datefmt="%Y-%m-%d %H:%M:%S"
     )
 
-    # Console handler (con protección Unicode)
+    # Console handler (Solo mostrar WARNING/ERROR en consola; INFO va al archivo de log)
+    console_level = logging.WARNING
+    if os.getenv("VERBOSE", "0") in ("1", "true", "True") or os.getenv("TITOFY_VERBOSE", "0") in ("1", "true", "True"):
+        console_level = log_level
+
     ch = SafeStreamHandler(sys.stdout)
-    ch.setLevel(log_level)
+    ch.setLevel(console_level)
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    # File handler
+    # File handler (guarda absolutamente TODOS los logs DEBUG/INFO/WARN/ERROR en archivo)
     if to_file:
         try:
-            # Ruta relativa al directorio del proyecto
             project_dir = os.path.dirname(os.path.abspath(__file__))
             full_log_dir = os.path.join(project_dir, log_dir)
             os.makedirs(full_log_dir, exist_ok=True)
 
-            log_file = os.path.join(full_log_dir, f"{datetime.now():%Y-%m-%d}.log")
+            log_file = os.path.join(full_log_dir, f"titofy-{datetime.now().strftime('%Y-%m-%d')}.log")
             fh = logging.FileHandler(log_file, encoding="utf-8")
-            fh.setLevel(log_level)
+            fh.setLevel(logging.DEBUG)
             fh.setFormatter(fmt)
             logger.addHandler(fh)
         except Exception:

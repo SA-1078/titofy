@@ -106,7 +106,7 @@ class BatchProcessor {
    */
   _runSingleTask(task, onProgressCallback = null) {
     return new Promise((resolve, reject) => {
-      const scriptPath = path.join(__dirname, "..", "whisper_transcribe.py");
+      const scriptPath = path.join(__dirname, "..", "..", "backend", "whisper_transcribe.py");
       const pythonBin = resolvePython(this.systemEnv);
 
       if (!pythonBin) {

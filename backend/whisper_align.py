@@ -18,41 +18,14 @@ Uso como módulo:
 import sys
 import os
 
+# Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Solución de Carga de DLLs para Windows CUDA y PyAV (Python 3.8+)
+# Gestión de GPU NVIDIA CUDA y carga de DLLs
 # ──────────────────────────────────────────────────────────────────────────────
-if os.name == "nt":
-    # 1. Obtener la raíz del entorno virtual (.venv)
-    venv_root = os.path.dirname(os.path.dirname(sys.executable))
-    site_packages = os.path.join(venv_root, "Lib", "site-packages")
-
-    if os.path.exists(site_packages):
-        # 2. Agregar paths de bibliotecas nvidia locales de la venv
-        for pkg in ["cublas", "cudnn", "cuda_nvrtc", "cuda_runtime"]:
-            bin_dir = os.path.join(site_packages, "nvidia", pkg, "bin")
-            if os.path.exists(bin_dir):
-                try:
-                    os.add_dll_directory(bin_dir)
-                except Exception:
-                    pass
-
-        # 3. Agregar path de PyAV (av.libs)
-        av_libs = os.path.join(site_packages, "av.libs")
-        if os.path.exists(av_libs):
-            try:
-                os.add_dll_directory(av_libs)
-            except Exception:
-                pass
-
-    # 4. Agregar paths de CUDA en el sistema si existen
-    cuda_path = os.environ.get("CUDA_PATH")
-    if cuda_path:
-        bin_dir = os.path.join(cuda_path, "bin")
-        if os.path.exists(bin_dir):
-            try:
-                os.add_dll_directory(bin_dir)
-            except Exception:
-                pass
+from soporte_para_cuda import setup_cuda_dlls, detect_device
+setup_cuda_dlls()
 
 import stable_whisper as whisper
 import torch
@@ -62,7 +35,7 @@ import shutil
 
 from logger import get_logger
 from lyric_config import get_config
-from whisper_transcribe import detect_device, is_model_downloaded, print_yellow, validate_audio_file, load_whisper_model
+from whisper_transcribe import is_model_downloaded, print_yellow, validate_audio_file, load_whisper_model
 
 log = get_logger("align")
 
