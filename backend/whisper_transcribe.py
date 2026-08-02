@@ -447,10 +447,18 @@ def generate_lrc(
     wcfg = cfg.get("whisper", {})
     compute_type = wcfg.get("compute_type", "auto")
 
-    if not is_model_downloaded(model_name, use_faster=True) and verbose:
-        print(f"  ℹ️  Se descargará el modelo automáticamente, por favor espera...")
+    try:
+        model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+    except Exception as exc:
+        exc_str = str(exc)
+        if "CUDA out of memory" in exc_str or "out of memory" in exc_str.lower():
+            log.warn(f"CUDA Out of Memory en GPU. Conmutando a CPU como fallback: {exc}")
+            print_yellow("  ⚠️ Memoria VRAM agotada en GPU. Conmutando automáticamente a CPU (int8)...")
+            device = "cpu"
+            model, is_faster = load_whisper_model(model_name, device="cpu", compute_type="int8")
+        else:
+            raise exc
 
-    model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
     log.info(f"Modelo '{model_name}' cargado en {device} [{device_name}] (faster={is_faster})")
 
     # Progress bar callback conectado a real_stdout

@@ -327,14 +327,20 @@ async function batchGenerateMenu(audioFiles) {
   }
 
   let maxWorkers = 2;
-  try {
-    const yaml = require("js-yaml");
-    const configPath = path.join(__dirname, "..", "..", "config.yaml");
-    if (fs.existsSync(configPath)) {
-      const cfg = yaml.load(fs.readFileSync(configPath, "utf-8"));
-      maxWorkers = (cfg && cfg.batch && cfg.batch.max_workers) || 2;
-    }
-  } catch { }
+  if (model === "turbo" || model === "large") {
+    // Modelos pesados (turbo/large) consumen ~3.5 GB VRAM por proceso.
+    // 1 worker a la vez garantiza velocidad extrema en GPU sin saturación ni CUDA OOM.
+    maxWorkers = 1;
+  } else {
+    try {
+      const yaml = require("js-yaml");
+      const configPath = path.join(__dirname, "..", "..", "backend", "config.yaml");
+      if (fs.existsSync(configPath)) {
+        const cfg = yaml.load(fs.readFileSync(configPath, "utf-8"));
+        maxWorkers = (cfg && cfg.batch && cfg.batch.max_workers) || 2;
+      }
+    } catch { }
+  }
 
   ui.header("Procesamiento por lotes");
   ui.box("Ejecucion", [
