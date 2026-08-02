@@ -9,6 +9,7 @@
     "play": "node index.js",
     "viz": "node index.js --viz",
     "api": "python ../backend/api_server.py",
+    "check-models": "node scripts/check-models.js",
     "ffmpeg:install": "node scripts/download-ffmpeg.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

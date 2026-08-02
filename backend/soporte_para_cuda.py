@@ -16,6 +16,8 @@ def setup_cuda_dlls():
     Agrega los directorios binarios de las dependencias nvidia y PyAV locales de la venv
     o del sistema al PATH de DLLs de Windows.
     """
+    os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
     if os.name == "nt":
         # 1. Obtener la raíz del entorno virtual (.venv)
         venv_root = os.path.dirname(os.path.dirname(sys.executable))
