@@ -72,7 +72,7 @@ async function songListMenu(folderPath, newModelsBanner) {
 
   const synced = audioFiles.filter(hasLrc).length;
   const pending = audioFiles.length - synced;
-  const nameWidth = Math.max(28, Math.min(ui.width() - 22, 84));
+  const nameWidth = Math.max(30, ui.width() - 22);
 
   const choices = [
     ui.separator("Canciones"),
@@ -120,8 +120,7 @@ async function startMenuLoop() {
     .catch(() => {}); // silencioso si falla
 
   enterAltScreen();
-  process.on("exit", exitAltScreen);
-  process.on("SIGINT", () => { exitAltScreen(); process.exit(0); });
+  // Nota: los handlers de SIGINT/exit ya están centralizados en alt-screen.js
 
   while (true) {
     const result = await songListMenu(currentFolder, newModelsBanner);

@@ -1,3 +1,10 @@
+/**
+ * Titofy — Copyright (C) 2026 Titofy
+ * Licensed under GNU General Public License v3.0 or later.
+ *
+ * menu-actions.js — Acciones Individuales de Pista y Flujos de la CLI
+ */
+
 const { spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -5,26 +12,35 @@ const chalk = require("chalk");
 const { prompt } = require("./prompt");
 const ui = require("./theme");
 const { exitAltScreen, enterAltScreen, customList } = require("./alt-screen");
+const { chooseModel, confirmSlowModel, modelChoices } = require("./model-selector");
+const { batchGenerateMenu } = require("./batch-ui");
 
 const {
   SYSTEM_ENV,
   getLrcPath,
   hasLrc,
   formatFileName,
+  getLyricsConfig,
 } = require("../config");
 
 const { startPlayer } = require("../player");
 const { startAsciiPlayer } = require("../ascii-player");
 const { LyricSyncAPI } = require("../api-client");
-const { BatchProcessor } = require("../batch-worker");
 const { resolvePython } = require("../python-resolver");
 
-function pause(message = "Presiona Enter para volver") {
-  return prompt([{
-    type: "input",
-    name: "_",
-    message: chalk.gray(message),
-  }]);
+async function pause(message = "Presiona Enter para volver") {
+  try {
+    return await prompt([{
+      type: "input",
+      name: "_",
+      message: chalk.gray(message),
+    }]);
+  } catch (err) {
+    if (err.name === "ExitPromptError" || err.message?.includes("force closed")) {
+      process.stdout.write("\x1b[?25h\x1b[?7h\x1b[?1049l\x1b[0m\x1b[2J\x1b[3J\x1b[H");
+      process.exit(0);
+    }
+  }
 }
 
 function lrcLineCount(lrcPath) {
@@ -34,6 +50,35 @@ function lrcLineCount(lrcPath) {
     .filter((line) => /^\[\d/.test(line))
     .length;
 }
+
+function showLyricsPreview(lrcPath, mode = "online", maxLines = 8) {
+  if (!fs.existsSync(lrcPath)) return;
+  const lines = fs.readFileSync(lrcPath, "utf-8")
+    .split(/\r?\n/)
+    .filter((l) => l.startsWith("[") && !l.startsWith("[ti") && !l.startsWith("[by") && !l.startsWith("[ar") && !l.startsWith("[al"));
+
+  if (lines.length === 0) return;
+
+  let titleLabel = "📋 Preview de letras obtenidas:";
+  if (mode === "ai" || mode === "ai_generated") {
+    titleLabel = "📋 Preview de letras generadas con IA:";
+  } else if (mode === "aligned" || mode === "online_aligned") {
+    titleLabel = "📋 Preview de letras alineadas:";
+  } else if (mode === "online" || mode === "online_synced") {
+    titleLabel = "📋 Preview de letras obtenidas online:";
+  }
+
+  console.log(`\n  ${titleLabel}`);
+  console.log(chalk.gray("  " + "─".repeat(56)));
+  lines.slice(0, maxLines).forEach((line) => {
+    console.log(`     ${chalk.cyan(line.slice(0, 10))} ${line.slice(10)}`);
+  });
+  if (lines.length > maxLines) {
+    console.log(chalk.gray(`     ... y ${lines.length - maxLines} líneas más`));
+  }
+  console.log(chalk.gray("  " + "─".repeat(56)) + "\n");
+}
+
 
 function renderTrackHeader(audioPath) {
   const lrcPath = getLrcPath(audioPath);
@@ -50,58 +95,86 @@ function renderTrackHeader(audioPath) {
   ui.box("Pista", rows);
 }
 
-function modelChoices(backValue = "__back__") {
-  return [
-    ui.actionChoice("turbo", "turbo   · Lo mejor (calidad profesional + velocidad)", "turbo", "ok"),
-    ui.actionChoice("small", "small   · Balance ideal para la mayoria de canciones", "small", "info"),
-    ui.actionChoice("base", "base    · Rapido (equipos lentos)", "base", "muted"),
-    ui.separator(),
-    ui.actionChoice("Volver", "Regresar sin cambios", backValue, "muted"),
-  ];
-}
-
-async function chooseModel(title = "Modelo de transcripcion") {
-  ui.header(title);
-  ui.box("Guia de modelos", [
-    ui.kv("turbo", "Lo mejor (calidad profesional + velocidad)"),
-    ui.kv("small", "Balance ideal para la mayoria de canciones"),
-    ui.kv("base", "Rapido (equipos lentos)"),
-  ]);
-  ui.footer();
-
-  const { model } = await prompt([{
-    type: "list",
-    name: "model",
-    message: "Selecciona modelo",
-    choices: modelChoices(),
-    default: "small",
-    pageSize: 8,
-  }]);
-
-  return model;
-}
-
-async function confirmSlowModel(model, count = 1) {
-  return true;
-}
-
-async function generateLrc(audioPath, model = "small", language = "es") {
+async function resolveHybridLyrics(audioPath, options = {}) {
   const lrcPath = getLrcPath(audioPath);
-  const api = new LyricSyncAPI();
+  const fileName = formatFileName(audioPath);
+  let artist = null;
+  let title = fileName;
 
-  if (await api.isRunning()) {
+  if (fileName.includes(" - ")) {
+    const parts = fileName.split(" - ");
+    artist = parts[0].trim();
+    title = parts.slice(1).join(" - ").trim();
+  }
+
+  ui.header(options.force ? "Regenerando Letras (Modo Hibrido)" : "Obteniendo Letras (Modo Hibrido)");
+  ui.box("Pista", [
+    ui.kv("Pista", ui.clip(fileName, ui.width() - 18)),
+    ui.kv("Estrategia", "Online (LRCLIB / Lyrics.ovh) → Whisper IA Local"),
+  ]);
+
+  console.log(chalk.cyan("  🔍 Buscando en proveedores online (LRCLIB / Lyrics.ovh)..."));
+
+  const api = new LyricSyncAPI();
+  const isApiReady = await api.ensureServerRunning();
+
+  if (isApiReady) {
     try {
-      const { task_id } = await api.transcribe(audioPath, model, language);
-      await api.waitForCompletion(task_id, (status, progress) => {
-        const pct = String(progress).padStart(3);
-        process.stdout.write(`\r  → Transcribiendo... [${pct}%]`);
+      const res = await api.resolveLyrics(artist, title, {
+        audioPath,
+        mode: "online_only",
+        language: "auto",
+        outputPath: lrcPath,
+        force: true,
+        timeout: 10000,
       });
-      process.stdout.write("\n");
-    } catch (err) {
-      ui.notice("Fallback de API", err.message, "warn");
+
+      if (res && res.lines && res.lines.length > 0 && fs.existsSync(lrcPath)) {
+        const source = res.source || "online_synced";
+        const lineCount = res.lines.length;
+
+        if (source === "online_aligned" || (res.provider && res.provider.includes("calibrado"))) {
+          ui.notice(
+            "🎯 Letra oficial obtenida y calibrada con tu audio en tiempo real",
+            `Fuente texto: ${res.provider || "LRCLIB"} · ${lineCount} líneas sincronizadas con Whisper IA`,
+            "ok"
+          );
+        } else {
+          ui.notice(
+            "⚡ Letras sincronizadas obtenidas al instante",
+            `Fuente: ${res.provider || "LRCLIB"} · ${lineCount} líneas sincronizadas`,
+            "ok"
+          );
+        }
+
+        showLyricsPreview(lrcPath, "aligned");
+        return true;
+      }
+
+    } catch {
+      // No encontrado online — continuar a Whisper local
     }
   }
 
+
+  // ── No se encontró online: Avisar explícitamente y ejecutar Whisper con barra ──
+  console.log(chalk.yellow("\n  ⚠️  No se encontraron letras en proveedores online para esta pista."));
+  console.log(chalk.cyan("  🤖 Iniciando transcripción local con IA (Whisper)...\n"));
+
+  const success = await generateLrc(audioPath, "small", "es");
+  if (success) {
+    ui.notice(
+      "🤖 Transcripción IA completada",
+      `Motor: Whisper local · ${lrcLineCount(lrcPath)} líneas sincronizadas`,
+      "ok"
+    );
+  }
+  return success;
+}
+
+
+async function generateLrc(audioPath, model = "small", language = "auto") {
+  const lrcPath = getLrcPath(audioPath);
   const scriptPath = path.join(__dirname, "..", "..", "..", "backend", "whisper_transcribe.py");
   const pythonBin = resolvePython(SYSTEM_ENV);
 
@@ -113,7 +186,7 @@ async function generateLrc(audioPath, model = "small", language = "es") {
   const success = await new Promise((resolve) => {
     const proc = spawn(
       pythonBin,
-      [scriptPath, audioPath, "--output", lrcPath, "--model", model, "--language", language],
+      [scriptPath, audioPath, "--output", lrcPath, "--model", model, "--language", language, "--force"],
       { stdio: "inherit", env: SYSTEM_ENV }
     );
 
@@ -128,32 +201,12 @@ async function generateLrc(audioPath, model = "small", language = "es") {
   });
 
   if (success && fs.existsSync(lrcPath)) {
-    const { showLyrics } = await prompt([{
-      type: "confirm",
-      name: "showLyrics",
-      message: "¿Deseas ver el resumen de letras?",
-      default: false,
-    }]);
-
-    if (showLyrics) {
-      const lines = fs.readFileSync(lrcPath, "utf-8")
-        .split(/\r?\n/)
-        .filter((l) => l.startsWith("[") && !l.startsWith("[ti") && !l.startsWith("[by"));
-
-      console.log("\n  📋 Resumen de letras:");
-      console.log(chalk.gray("  " + "─".repeat(56)));
-      lines.slice(0, 8).forEach((line) => {
-        console.log(`     ${chalk.cyan(line.slice(0, 10))} ${line.slice(10)}`);
-      });
-      if (lines.length > 8) {
-        console.log(chalk.gray(`     ... y ${lines.length - 8} líneas más`));
-      }
-      console.log(chalk.gray("  " + "─".repeat(56)) + "\n");
-    }
+    showLyricsPreview(lrcPath, "ai");
   }
 
   return success;
 }
+
 
 async function alignLyrics(audioPath) {
   const lrcPath = getLrcPath(audioPath);
@@ -273,196 +326,223 @@ async function playSongVisualizer(audioPath) {
     return;
   }
 
-  ui.notice("Iniciando visualizador de espectro", path.basename(audioPath), "info");
   await startAsciiPlayer(audioPath, lrcPath, SYSTEM_ENV);
-}
-
-async function batchGenerateMenu(audioFiles) {
-  const withoutLrc = audioFiles.filter((file) => !hasLrc(file));
-
-  ui.header("Procesamiento por lotes");
-
-  if (withoutLrc.length === 0) {
-    ui.box("Lote", [
-      ui.kv("Estado", `${ui.pill("LISTO", "ok")} Todas las pistas ya tienen letras`),
-    ]);
-    await pause();
-    return;
-  }
-
-  ui.box("Lote", [
-    ui.kv("Pendientes", String(withoutLrc.length)),
-    ui.kv("Modo", "Selecciona pistas y luego un modelo Whisper"),
-  ]);
-
-  const nameWidth = Math.max(28, Math.min(ui.width() - 22, 78));
-  const choices = withoutLrc.map((file) => ({
-    name: `  ${ui.clip(formatFileName(file), nameWidth)}`,
-    value: file,
-    checked: true,
-  }));
-
-  const { selected } = await prompt([{
-    type: "checkbox",
-    name: "selected",
-    message: "Pistas a procesar",
-    choices,
-    pageSize: Math.min(16, Math.max(8, (process.stdout.rows || 28) - 10)),
-  }]);
-
-  if (selected.length === 0) {
-    ui.notice("Sin seleccion", "Usa Espacio para marcar pistas antes de continuar.", "warn");
-    await pause();
-    return;
-  }
-
-  const model = await chooseModel("Modelo para lote");
-  if (model === "__back__") return;
-
-  const ok = await confirmSlowModel(model, selected.length);
-  if (!ok) {
-    ui.notice("Cancelado", "No se inicio el procesamiento por lotes.", "warn");
-    await pause();
-    return;
-  }
-
-  let maxWorkers = 2;
-  if (model === "turbo" || model === "large") {
-    // Modelos pesados (turbo/large) consumen ~3.5 GB VRAM por proceso.
-    // 1 worker a la vez garantiza velocidad extrema en GPU sin saturación ni CUDA OOM.
-    maxWorkers = 1;
-  } else {
-    try {
-      const yaml = require("js-yaml");
-      const configPath = path.join(__dirname, "..", "..", "backend", "config.yaml");
-      if (fs.existsSync(configPath)) {
-        const cfg = yaml.load(fs.readFileSync(configPath, "utf-8"));
-        maxWorkers = (cfg && cfg.batch && cfg.batch.max_workers) || 2;
-      }
-    } catch { }
-  }
-
-  ui.header("Procesamiento por lotes");
-  ui.box("Ejecucion", [
-    ui.kv("Modelo", model),
-    ui.kv("Pistas", String(selected.length)),
-    ui.kv("Procesos", String(maxWorkers)),
-  ]);
-
-  const batch = new BatchProcessor(maxWorkers, SYSTEM_ENV);
-  for (const file of selected) {
-    batch.addTask({
-      audioPath: file,
-      outputPath: getLrcPath(file),
-      model,
-      language: "es",
-    });
-  }
-
-  const results = await batch.processAll((idx, total, fileName, status, detail) => {
-    const statusLabel = String(status).padEnd(8);
-    const tone = status === "done" ? chalk.green(statusLabel) : status === "error" ? chalk.red(statusLabel) : chalk.cyan(statusLabel);
-    console.log(`  ${chalk.dim(`[${idx}/${total}]`)} ${tone} ${ui.clip(fileName, 58)} ${chalk.dim(detail || "")}`);
-  });
-
-  const successes = results.filter((result) => result.success).length;
-  const failures = results.filter((result) => !result.success).length;
-
-  ui.notice("Lote completado", `${successes} correcta(s), ${failures} fallida(s).`, failures ? "warn" : "ok");
-  await pause();
 }
 
 async function inspectLrc(audioPath) {
   const lrcPath = getLrcPath(audioPath);
-  const content = fs.readFileSync(lrcPath, "utf-8");
-  const lines = content.split(/\r?\n/);
-  const previewLimit = Math.max(10, Math.min((process.stdout.rows || 28) - 10, 24));
+  if (!fs.existsSync(lrcPath)) {
+    ui.notice("Faltan letras", "Aun no existe archivo .lrc para esta pista.", "warn");
+    return;
+  }
 
-  ui.header("Archivo de letras");
-  ui.box(path.basename(lrcPath), [
-    ...lines.slice(0, previewLimit).map((line) => ui.clip(line, ui.width() - 6)),
-    ...(lines.length > previewLimit ? [chalk.dim(`... ${lines.length - previewLimit} linea(s) mas`)] : []),
+  const content = fs.readFileSync(lrcPath, "utf-8");
+  const lines = content.split(/\r?\n/).filter(Boolean);
+
+  ui.header("Inspeccion de letras");
+  ui.box("Archivo LRC", [
+    ui.kv("Pista", ui.clip(formatFileName(audioPath), ui.width() - 18)),
+    ui.kv("Ruta", ui.clip(lrcPath, ui.width() - 16)),
+    ui.kv("Lineas", String(lines.length)),
   ]);
+
+  console.log(chalk.bold("  📜 Primeras lineas del archivo:"));
+  console.log(chalk.gray("  " + "─".repeat(Math.min(ui.width(), 64))));
+  lines.slice(0, 12).forEach((line) => {
+    if (line.startsWith("[")) {
+      console.log(`     ${chalk.cyan(line.slice(0, 10))} ${line.slice(10)}`);
+    } else {
+      console.log(`     ${line}`);
+    }
+  });
+  console.log(chalk.gray("  " + "─".repeat(Math.min(ui.width(), 64))) + "\n");
+
   await pause();
 }
 
-async function songActionMenu(audioPath) {
-  const lrcExists = hasLrc(audioPath);
-  const choices = [];
+async function alignOnlineLyricsWithLocalAudio(audioPath) {
+  const lrcPath = getLrcPath(audioPath);
+  const fileName = formatFileName(audioPath);
+  let artist = null;
+  let title = fileName;
 
-  if (lrcExists) {
-    choices.push(ui.actionChoice("Reproducir", "Reproductor interactivo", "play", "ok"));
-    choices.push(ui.actionChoice("Visualizador espectro", "Espectro ASCII animado", "play_viz", "info"));
-    choices.push(ui.actionChoice("Regenerar letras", "Sobreescribir .lrc actual", "regen", "warn"));
-    choices.push(ui.actionChoice("Alinear letra existente", "Sincronizacion forzada", "align", "info"));
-    choices.push(ui.actionChoice("Inspeccionar .lrc", "Vista previa sincronizada", "view", "muted"));
-  } else {
-    choices.push(ui.actionChoice("Generar letras", "Transcribir con Whisper", "gen_small", "ok"));
-    choices.push(ui.actionChoice("Alinear letra existente", "Sincronizacion forzada", "align", "info"));
+  if (fileName.includes(" - ")) {
+    const parts = fileName.split(" - ");
+    artist = parts[0].trim();
+    title = parts.slice(1).join(" - ").trim();
   }
 
-  choices.push(ui.separator());
-  choices.push(ui.actionChoice("Volver", "Regresar a biblioteca", "back", "muted"));
+  ui.header("Alineacion con Audio Local");
+  ui.box("Pista", [
+    ui.kv("Pista", ui.clip(fileName, ui.width() - 18)),
+    ui.kv("Estrategia", "Descarga texto oficial y lo sincroniza con tu audio local exacto"),
+  ]);
 
-  // Usar customList para evitar el scroll infinito de inquirer nativo.
-  // ui.footer() va dentro del render del header para que customList lo capture.
-  const action = await customList(
-    () => { renderTrackHeader(audioPath); ui.footer(); },
-    choices,
-    "Selecciona accion"
-  );
+  console.log(chalk.cyan("  🔍 Obteniendo texto oficial y alineando con tu audio..."));
 
-  switch (action) {
-    case "play":
-      exitAltScreen();
-      await playSong(audioPath);
-      enterAltScreen();
-      break;
+  const api = new LyricSyncAPI();
+  const isApiReady = await api.ensureServerRunning();
 
-    case "play_viz":
-      exitAltScreen();
-      await playSongVisualizer(audioPath);
-      enterAltScreen();
-      break;
+  if (isApiReady) {
+    try {
+      const res = await api.resolveLyrics(artist, title, {
+        audioPath,
+        mode: "online_align",
+        language: "es",
+        outputPath: lrcPath,
+        force: true,
+        timeout: 60000,
+      });
 
-    case "gen_small":
-    case "regen": {
-      const model = await chooseModel(action === "regen" ? "Regenerar letras" : "Generar letras");
-      if (model === "__back__") break;
-
-      const ok = await confirmSlowModel(model);
-      if (!ok) {
-        ui.notice("Cancelado", "No se inicio la generacion de letras.", "warn");
-        await pause();
-        break;
+      if (res && res.lines && res.lines.length > 0 && fs.existsSync(lrcPath)) {
+        ui.notice(
+          "🎯 Letra oficial alineada milimetricamente con tu audio",
+          `Fuente: ${res.provider || "Online"} · ${res.lines.length} lineas sincronizadas`,
+          "ok"
+        );
+        showLyricsPreview(lrcPath, "aligned");
+        return true;
       }
-
-      await generateLrc(audioPath, model, "es");
-      await pause();
-      break;
+    } catch (err) {
+      ui.notice("Aviso de alineacion", err.message, "warn");
     }
+  }
 
-    case "view":
-      await inspectLrc(audioPath);
-      break;
+  ui.notice("No se pudo alinear online", "Prueba con transcripcion directa de Whisper o archivo .txt", "warn");
+  return false;
+}
 
-    case "align":
-      await alignLyrics(audioPath);
-      await pause();
-      break;
+async function regenerateLyricsMenu(audioPath) {
+  ui.header("Regenerar Letras");
+  ui.box("Pista", [
+    ui.kv("Pista", ui.clip(formatFileName(audioPath), ui.width() - 18)),
+    ui.kv("Accion", "Reemplazar la letra actual con un nuevo procesamiento"),
+  ]);
 
-    case "back":
-    default:
-      break;
+  const { method } = await prompt([{
+    type: "list",
+    name: "method",
+    message: "Selecciona el metodo de regeneracion",
+    choices: [
+      ui.actionChoice("1. Automatico (Hibrido: Online + Calibracion IA)", "Busca texto oficial y lo calibra con tu audio local (Recomendado)", "resolve", "ok"),
+      ui.actionChoice("2. Solo IA local (Whisper)", "Transcribir audio offline forzando Whisper desde cero", "gen", "info"),
+      ui.actionChoice("3. Forced Alignment (.txt local)", "Sincronizar una letra desde archivo .txt", "align", "info"),
+      ui.separator(),
+      ui.actionChoice("Volver", "Cancelar y regresar al menu de pista", "back", "muted"),
+    ],
+    pageSize: 6,
+  }]);
+
+  if (method === "back" || !method) return;
+
+  if (method === "resolve") {
+    await resolveHybridLyrics(audioPath, { force: true });
+    await pause();
+  } else if (method === "gen") {
+    const model = await chooseModel();
+    if (model !== "__back__") {
+      const ok = await confirmSlowModel(model, 1);
+      if (ok) {
+        ui.header("Generando letras");
+        ui.notice("Iniciando Whisper local", `Modelo: ${model}`, "info");
+        const okGen = await generateLrc(audioPath, model);
+        if (okGen) {
+          ui.notice("Transcribir completado", "El archivo .lrc se actualizo correctamente.", "ok");
+        }
+        await pause();
+      }
+    }
+  } else if (method === "align") {
+    await alignLyrics(audioPath);
+    await pause();
   }
 }
 
+
+
+async function trackMenu(audioPath) {
+  while (true) {
+    const synced = hasLrc(audioPath);
+
+    const choices = [];
+
+    if (synced) {
+      // Pista con letras sincronizadas: Opciones principales de reproductor
+      choices.push(ui.actionChoice("Visualizador ASCII (Espectro PRO)", "Reproducir con visualizador animado de frecuencias", "play_viz", "ok"));
+      choices.push(ui.actionChoice("Reproductor clasico", "Reproducir audio con sincronizacion de letras clasica", "play", "info"));
+      choices.push(ui.actionChoice("Ver contenido del .lrc", "Inspeccionar marcas de tiempo y texto", "inspect", "info"));
+      choices.push(ui.separator("Mantenimiento"));
+      choices.push(ui.actionChoice("Regenerar letras", "Elegir metodo: Automatico (Online+IA), Solo Whisper o .txt", "regenerate", "muted"));
+    } else {
+      // Pista pendiente de letras
+      choices.push(ui.actionChoice("Obtener letras (Modo Hibrido: Online + IA)", "Busca online (LRCLIB), alinea o genera con Whisper", "resolve", "ok"));
+      choices.push(ui.actionChoice("Generar solo con IA local (Whisper)", "Transcribir audio offline sin consultar internet", "gen", "info"));
+      choices.push(ui.actionChoice("Forced Alignment (Alinear .txt)", "Sincronizar una letra de texto que ya tengas", "align", "info"));
+    }
+
+    choices.push(ui.separator());
+    choices.push(ui.actionChoice("Volver al menu", "Regresar a la biblioteca", "back", "muted"));
+
+    const action = await customList(
+      () => renderTrackHeader(audioPath),
+      choices,
+      "Selecciona una accion"
+    );
+
+    if (action === "back" || action === null || action === undefined) return;
+
+    exitAltScreen();
+
+    if (action === "play_viz") {
+      await playSongVisualizer(audioPath);
+    } else if (action === "play") {
+      await playSong(audioPath);
+    } else if (action === "inspect") {
+      await inspectLrc(audioPath);
+    } else if (action === "resolve") {
+      await resolveHybridLyrics(audioPath);
+      await pause();
+    } else if (action === "regenerate") {
+      await regenerateLyricsMenu(audioPath);
+    } else if (action === "gen") {
+      const model = await chooseModel();
+      if (model !== "__back__") {
+        const ok = await confirmSlowModel(model, 1);
+        if (ok) {
+          ui.header("Generando letras");
+          ui.notice("Iniciando Whisper local", `Modelo: ${model}`, "info");
+          const okGen = await generateLrc(audioPath, model);
+          if (okGen) {
+            ui.notice("Transcribir completado", "El archivo .lrc se creo correctamente.", "ok");
+          }
+          await pause();
+        }
+      }
+    } else if (action === "align") {
+      await alignLyrics(audioPath);
+      await pause();
+    }
+
+    enterAltScreen();
+  }
+}
+
+// Alias de compatibilidad: menu-core.js importa songActionMenu
+const songActionMenu = trackMenu;
+
 module.exports = {
+  trackMenu,
+  songActionMenu,
+  regenerateLyricsMenu,
+  batchGenerateMenu,
   pause,
+  chooseModel,
+  confirmSlowModel,
   generateLrc,
+  resolveHybridLyrics,
   alignLyrics,
   playSong,
   playSongVisualizer,
-  batchGenerateMenu,
-  songActionMenu,
 };
+
+

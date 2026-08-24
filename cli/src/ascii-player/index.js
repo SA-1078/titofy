@@ -73,25 +73,10 @@ function startAsciiPlayer(audioFile, lrcFile, systemEnv) {
       if (exactDur) totalDuration = exactDur;
     }
 
-    // ─── Estado del reproductor (Clock Central) ──────────────
-    const state = {
-      playing: false,
-      elapsed: 0,
-      resumeTime: 0,
-      totalDuration,
-      lyrics,
-      songTitle,
-      currentLineIdx: -1,
-      finished: false,
-      exiting: false,
-      volume: 100,
-
-      // Espectro (actualizado por SpectrumAnalyzer)
-      bands: [],
-      peaks: [],
-      numBands: 0,
-      beat: {},
-    };
+    const { createPlayerClock } = require("./player-clock");
+    const { state, getElapsed, clampPosition } = createPlayerClock(totalDuration);
+    state.lyrics = lyrics;
+    state.songTitle = songTitle;
 
     // ─── Componentes ─────────────────────────────────────────
     let audio = null;
@@ -100,23 +85,13 @@ function startAsciiPlayer(audioFile, lrcFile, systemEnv) {
     let cleanupKbd = null;
 
     // ─── Timers del sistema ──────────────────────────────────
-    let uiTickInterval = null;     // Timer lento para UI (letras/progreso) cuando pausado
-    let streamWatchdog = null;     // Vigilante de stream muerto
+    let uiTickInterval = null;
+    let streamWatchdog = null;
 
     // ─── Frame throttle & backpressure ───────────────────────
     const FRAME_TIME = Math.round(1000 / cfg.FPS);
     let lastFrameTime = 0;
     let isRendering = false;
-
-    // ─── Clock Central ───────────────────────────────────────
-    function getElapsed() {
-      if (!state.playing) return state.elapsed;
-      return state.elapsed + (Date.now() - state.resumeTime) / 1000;
-    }
-
-    function clampPosition(position) {
-      return Math.max(0, Math.min(position, totalDuration));
-    }
 
     // ─── Audio (ffplay) ──────────────────────────────────────
     if (hasAudio) {
@@ -379,9 +354,15 @@ function startAsciiPlayer(audioFile, lrcFile, systemEnv) {
       if (analyzer) analyzer.destroy();
       state.playing = false;
 
-      // 3. Restaurar terminal
+      // 3. Restaurar terminal completamente:
+      //    Salir del buffer alternativo restaura automáticamente el estado previo
       process.stdout.removeListener("resize", onResize);
-      process.stdout.write("\x1b[?7h\x1b[?25h");
+      process.stdout.write(
+        "\x1b[?25h"  +  // mostrar cursor
+        "\x1b[?7h"   +  // restaurar line-wrap
+        "\x1b[0m"    +  // resetear colores
+        "\x1b[?1049l"   // salir del buffer alternativo → restaura pantalla previa
+      );
 
       // 4. Cleanup
       setTimeout(() => {
@@ -428,7 +409,8 @@ function startAsciiPlayer(audioFile, lrcFile, systemEnv) {
     }
 
     // ─── Inicialización ──────────────────────────────────────
-    process.stdout.write("\x1b[?7l\x1b[?25l"); // No-wrap + hide cursor
+    // Entrar al buffer alternativo + limpiar + ocultar cursor + deshabilitar wrap
+    process.stdout.write("\x1b[?1049h\x1b[H\x1b[J\x1b[?7l\x1b[?25l");
     resetSpectrumRenderer();
 
     // Iniciar audio + analyzer

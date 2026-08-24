@@ -321,7 +321,9 @@ function renderSpectrum(state) {
 
   // 5 slots fijos para letras — transiciones tipo Spotify
   const lyricSlots = ["", "", "", "", ""];
-  if (lineIdx >= 0) {
+  if (finished) {
+    lyricSlots[2] = chalk.rgb(95, 95, 95).italic(`      (Fin de la canción)`);
+  } else if (lineIdx >= 0) {
     const easeOut = easeOutCubic;
     // Transición dura lo configurado o 600ms
     const transitionDuration = cfg.LYRIC_TRANSITION_MS || 600;

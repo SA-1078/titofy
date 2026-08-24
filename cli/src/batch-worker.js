@@ -134,9 +134,20 @@ class BatchProcessor {
         // Detectar si está descargando el modelo o transcribiendo por primera vez
         if (text.includes("descargará automáticamente")) {
           if (onProgressCallback) {
-            onProgressCallback("downloading", "⏳ Descargando modelo (puede tomar unos minutos)...");
+            onProgressCallback("downloading", { pct: 0, detail: "⏳ Descargando modelo de IA..." });
           }
           log.info(`[WORKER] Descargando modelo para: ${task.audioPath}`);
+        }
+
+        // Detectar progreso de transcripción: → Transcribiendo  ████████████░░░░░░░░  58%  ·  1:47 restantes
+        const progressMatch = text.match(/→\s*Transcribiendo\s+([█░]+)\s+(\d+)%\s+·\s+([^\r\n]+)/);
+        if (progressMatch) {
+          const bar = progressMatch[1];
+          const pct = parseInt(progressMatch[2], 10);
+          const eta = progressMatch[3].trim();
+          if (onProgressCallback) {
+            onProgressCallback("running", { pct, bar, eta });
+          }
         }
       });
 

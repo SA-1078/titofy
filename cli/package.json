@@ -1,7 +1,8 @@
 {
   "name": "titofy",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Reproductor de letras sincronizadas con IA offline + Visualizador ASCII",
+
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
@@ -10,6 +11,10 @@
     "viz": "node index.js --viz",
     "api": "python ../backend/api_server.py",
     "check-models": "node scripts/check-models.js",
+    "check-errors": "node scripts/check-errors.js",
+    "check-errors:python": "node scripts/check-errors.js --python",
+    "check-errors:js": "node scripts/check-errors.js --js",
+    "check-errors:dart": "node scripts/check-errors.js --dart",
     "ffmpeg:install": "node scripts/download-ffmpeg.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

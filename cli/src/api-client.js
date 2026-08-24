@@ -18,6 +18,29 @@ const { createLogger } = require("./logger");
 
 const log = createLogger("api-client");
 
+let _spawnedBackendProcess = null;
+
+function _killSpawnedBackend() {
+  if (_spawnedBackendProcess && !_spawnedBackendProcess.killed) {
+    try {
+      if (process.platform === "win32") {
+        const { execSync } = require("child_process");
+        execSync(`taskkill /pid ${_spawnedBackendProcess.pid} /T /F`, { stdio: "ignore" });
+      } else {
+        process.kill(-_spawnedBackendProcess.pid, "SIGTERM");
+      }
+    } catch {
+      try { _spawnedBackendProcess.kill("SIGKILL"); } catch {}
+    }
+    _spawnedBackendProcess = null;
+  }
+}
+
+process.on("exit", _killSpawnedBackend);
+process.on("SIGINT", _killSpawnedBackend);
+process.on("SIGTERM", _killSpawnedBackend);
+
+
 class LyricSyncAPI {
   constructor(host = "127.0.0.1", port = 8642) {
     this.host = host;
@@ -40,7 +63,7 @@ class LyricSyncAPI {
    * Hace una petición HTTP a la API local.
    * @returns {Promise<object>} - Respuesta JSON parseada
    */
-  _request(method, path, body = null) {
+  _request(method, path, body = null, timeoutMs = 8000) {
     return new Promise((resolve, reject) => {
       const options = {
         hostname: this.host,
@@ -48,7 +71,7 @@ class LyricSyncAPI {
         path,
         method,
         headers: { "Content-Type": "application/json" },
-        timeout: 5000,
+        timeout: timeoutMs,
       };
 
       const req = http.request(options, (res) => {
@@ -66,7 +89,7 @@ class LyricSyncAPI {
       req.on("error", reject);
       req.on("timeout", () => {
         req.destroy();
-        reject(new Error("Timeout"));
+        reject(new Error(`Timeout de petición (${timeoutMs}ms)`));
       });
 
       if (body) req.write(JSON.stringify(body));
@@ -79,39 +102,93 @@ class LyricSyncAPI {
    */
   async isRunning() {
     try {
-      const res = await this._request("GET", "/health");
-      return res.status === "ok";
+      const res = await this._request("GET", "/health", null, 2500);
+      return res && res.status === "ok";
     } catch {
       return false;
     }
   }
 
   /**
-   * Inicia transcripción async. Retorna task_id.
+   * Asegura que el servidor API esté en ejecución, arrancándolo en segundo plano si es necesario.
    */
-  async transcribe(audioPath, model = "small", language = "es") {
-    return this._request("POST", "/transcribe", {
-      audio_path: audioPath,
-      model,
-      language,
-    });
+  async ensureServerRunning() {
+
+    if (await this.isRunning()) return true;
+
+    try {
+      const { resolvePython } = require("./python-resolver");
+      const { SYSTEM_ENV, getLyricsConfig } = require("./config");
+      const cfg = getLyricsConfig();
+      if (!cfg.auto_start_api) return false;
+
+      const pythonBin = resolvePython(SYSTEM_ENV);
+      if (!pythonBin) return false;
+
+      const backendDir = path.join(__dirname, "..", "..", "backend");
+      const serverScript = path.join(backendDir, "api_server.py");
+
+      const { spawn } = require("child_process");
+      const proc = spawn(pythonBin, [serverScript], {
+        detached: process.platform !== "win32",
+        stdio: "ignore",
+        cwd: backendDir,
+        env: SYSTEM_ENV,
+      });
+
+      _spawnedBackendProcess = proc;
+
+      // Esperar hasta 4.5 segundos a que la API responda
+      for (let i = 0; i < 18; i++) {
+        await new Promise((r) => setTimeout(r, 250));
+        if (await this.isRunning()) return true;
+      }
+    } catch (err) {
+      log.warning("No se pudo auto-iniciar el servidor de backend:", err);
+    }
+    return false;
   }
 
+
   /**
-   * Inicia forced alignment async. Retorna task_id.
+   * Resuelve letras usando el motor híbrido (Caché → LRCLIB → Forced Alignment → Whisper).
    */
-  async align(audioPath, lyricsText, model = "base", language = "es") {
-    return this._request("POST", "/align", {
-      audio_path: audioPath,
-      lyrics_text: lyricsText,
-      model,
-      language,
-    });
+  async resolveLyrics(artist, title, options = {}) {
+    const {
+      duration = null,
+      audioPath = null,
+      mode = "auto",
+      model = "small",
+      language = "auto",
+      outputPath = null,
+      force = false,
+      timeout = 600000, // 10 minutos por si entra a Whisper (Nivel 3)
+    } = options;
+
+    return this._request(
+      "POST",
+      "/lyrics/resolve",
+      {
+        artist,
+        title,
+        duration,
+        audio_path: audioPath,
+        mode,
+        model,
+        language,
+        output_path: outputPath,
+        force,
+      },
+      timeout
+    );
   }
+
+
 
   /**
    * Post-procesa un .lrc (sincrónico).
    */
+
   async postprocess(lrcPath, threshold = 85) {
     return this._request("POST", "/postprocess", {
       lrc_path: lrcPath,

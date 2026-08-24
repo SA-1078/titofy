@@ -251,7 +251,7 @@ function startPlayer(audioFile, lrcFile, systemEnv) {
 
     // ─── Inicialización ──────────────────────────────────────────
     // Buffer Principal (No-Wrap y Hide Cursor)
-    process.stdout.write("\x1b[?7l\x1b[?25l");
+    process.stdout.write("\x1b[H\x1b[J\x1b[?7l\x1b[?25l");
     resetRenderer();
     startAudioAt(0);
 

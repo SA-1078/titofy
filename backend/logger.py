@@ -40,7 +40,12 @@ class SafeStreamHandler(logging.StreamHandler):
             self.handleError(record)
 
 
-def get_logger(name: str, level: str = None, to_file: bool = None, log_dir: str = None) -> logging.Logger:
+def get_logger(
+    name: str,
+    level: str | None = None,
+    to_file: bool | None = None,
+    log_dir: str | None = None,
+) -> logging.Logger:
     """
     Crea o retorna un logger configurado.
 
