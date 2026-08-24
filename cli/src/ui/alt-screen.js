@@ -9,14 +9,79 @@ const chalk = require("chalk");
 const readline = require("readline");
 const inquirer = require("inquirer");
 
-// ─── Alternate Screen Buffer ──────────────────────────────────────────────
+// ─── Estado interno del alt-screen ────────────────────────────────────────
+let _inAltScreen = false;
+
+// Secuencia completa de restauración de terminal:
+//   \x1b[?25h   → mostrar cursor
+//   \x1b[?7h    → restaurar line-wrap
+//   \x1b[?1049l → salir del buffer alternativo
+//   \x1b[0m     → resetear atributos de color
+const RESTORE_TERMINAL = "\x1b[?25h\x1b[?7h\x1b[?1049l\x1b[0m\x1b[2J\x1b[3J\x1b[H";
+
 function enterAltScreen() {
+  _inAltScreen = true;
   process.stdout.write("\x1b[?1049h\x1b[H\x1b[J");
 }
 
 function exitAltScreen() {
-  process.stdout.write("\x1b[?1049l");
+  _inAltScreen = false;
+  try {
+    process.stdout.write(RESTORE_TERMINAL);
+  } catch (_) { /* stdout ya cerrado — ignorar */ }
 }
+
+
+// ─── Handler global de salida limpia ─────────────────────────────────────
+// Garantiza que el terminal siempre quede restaurado sin importar cómo
+// muera el proceso: Ctrl+C, error no capturado, process.exit(), etc.
+// IMPORTANTE: limpia pantalla SIEMPRE, no solo cuando está en alt-screen,
+// porque el proceso puede morir en modo normal (ej: durante transcripción).
+const FULL_RESET =
+  "\x1b[?25h"   +  // mostrar cursor
+  "\x1b[?7h"   +   // restaurar line-wrap
+  "\x1b[?1049l" +  // salir del buffer alternativo (no-op si no se entró)
+  "\x1b[0m"    +   // resetear colores
+  "\x1b[3J"    +   // limpiar scrollback buffer
+  "\x1b[2J"    +   // limpiar pantalla completa
+  "\x1b[H";        // cursor al origen
+
+function _emergencyRestore() {
+  _inAltScreen = false;
+  try { process.stdout.write(FULL_RESET); } catch (_) { }
+}
+
+// Versión con flush garantizado: espera que el write llegue al terminal
+function _flushAndExit(code = 0, msg = "") {
+  _inAltScreen = false;
+  const payload = FULL_RESET + (msg ? msg + "\n" : "");
+  try {
+    // drain garantiza que el kernel recibe los bytes antes de exit()
+    process.stdout.write(payload, () => process.exit(code));
+  } catch (_) {
+    process.exit(code);
+  }
+}
+
+process.on("SIGINT", () => {
+  _flushAndExit(0, "  👋 Titofy CLI cerrado.\n");
+});
+
+process.on("SIGTERM", () => {
+  _flushAndExit(0);
+});
+
+process.on("exit", () => {
+  // Solo restaurar cursor y wrap, sin limpiar pantalla (salida normal)
+  try {
+    if (_inAltScreen) process.stdout.write(RESTORE_TERMINAL);
+    else process.stdout.write("\x1b[?25h\x1b[?7h\x1b[0m");
+  } catch (_) { }
+});
+
+process.on("uncaughtException", (err) => {
+  _flushAndExit(1, `\n  ❌ Error no capturado: ${err.message}\n`);
+});
 
 // ─── Custom List Selector ─────────────────────────────────────────────────
 // Sustituye inquirer's list para evitar el bug de scroll infinito.
@@ -144,8 +209,8 @@ function customList(renderHeader, choices, message) {
 
       if ((key.ctrl && key.name === "c") || key.name === "q") {
         cleanup();
-        exitAltScreen();
-        process.exit(0);
+        _flushAndExit(0, "\n  👋 Titofy CLI cerrado.\n");
+        return;
       }
 
       if (key.name === "up") {

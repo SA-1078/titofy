@@ -116,6 +116,17 @@ class PostprocessRequest(BaseModel):
     threshold: int = 85
     output_path: Optional[str] = None
 
+class ResolveLyricsRequest(BaseModel):
+    artist: Optional[str] = None
+    title: Optional[str] = None
+    duration: Optional[float] = None
+    audio_path: Optional[str] = None
+    mode: Optional[str] = "auto"          # "auto", "offline", "ai_only", "online_only"
+    model: Optional[str] = "small"
+    language: Optional[str] = "auto"
+    output_path: Optional[str] = None
+    force: Optional[bool] = False
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Workers (background threads)
@@ -142,7 +153,7 @@ def _run_transcription(task: TaskState, req: TranscribeRequest):
         task.progress = 10
         log.info(f"[{task.task_id}] Transcripción iniciada: {req.audio_path}")
 
-        from whisper_transcribe import generate_lrc
+        from whisper_engine.transcribe import transcribe_audio
         output = req.output_path or os.path.splitext(os.path.basename(req.audio_path))[0] + ".lrc"
 
         # Asegurar que el directorio de salida exista
@@ -151,7 +162,7 @@ def _run_transcription(task: TaskState, req: TranscribeRequest):
         output_full = os.path.join(lrc_dir, output) if not os.path.isabs(output) else output
 
         task.progress = 20
-        generate_lrc(
+        transcribe_audio(
             audio_path=req.audio_path,
             output_path=output_full,
             model_name=req.model,
@@ -275,7 +286,39 @@ async def postprocess(req: PostprocessRequest):
     }
 
 
+@app.post("/lyrics/resolve")
+async def resolve_lyrics(req: ResolveLyricsRequest):
+    """
+    Resuelve la letra de una canción usando el motor híbrido (Caché → Online → Forced Alignment → Whisper).
+    """
+    from lyrics.resolver import LyricsResolver
+    resolver = LyricsResolver()
+
+    try:
+        data = resolver.resolve(
+            artist=req.artist,
+            title=req.title,
+            duration=req.duration,
+            audio_path=req.audio_path,
+            mode=req.mode or "auto",
+            model_name=req.model or "small",
+            language=req.language or "auto",
+            output_lrc=req.output_path,
+            force=bool(req.force),
+        )
+        if data is None:
+            raise HTTPException(status_code=404, detail="No se encontraron letras para esta canción")
+        return data.to_dict()
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error(f"Error en /lyrics/resolve: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+
 @app.get("/status/{task_id}")
+
 async def get_status(task_id: str):
     """Consulta el estado de una tarea."""
     task = tasks.get(task_id)

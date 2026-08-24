@@ -47,11 +47,12 @@ if (audioArgIdx !== -1 && lrcArgIdx !== -1) {
   const { startMenuLoop } = require("./src/ui/menu-core");
 
   startMenuLoop().catch((err) => {
-    if (err.isTtyError || err.message?.includes("force closed")) {
-      console.log("\n\n  👋 Titofy CLI cerrado.\n");
+    process.stdout.write("\x1b[?25h\x1b[?7h\x1b[?1049l\x1b[0m\x1b[2J\x1b[3J\x1b[H");
+    if (err.isTtyError || err.message?.includes("force closed") || err.name === "ExitPromptError") {
       process.exit(0);
     }
     console.error(`\nError: ${err.message}`);
     process.exit(1);
   });
 }
+

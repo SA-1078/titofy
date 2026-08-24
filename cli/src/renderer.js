@@ -190,7 +190,10 @@ function render(state) {
     prevLineIdx = lineIdx;
   }
 
-  if (lineIdx >= 0) {
+  if (finished) {
+    // Cuando la canción finaliza, limpiar el área de letras
+    lyricSlots[2] = chalk.rgb(95, 95, 95).italic(`      (Fin de la canción)`);
+  } else if (lineIdx >= 0) {
     const easeOut = easeOutCubic;
     const transition = lineChangeTimeMs
       ? easeOut((nowMs - lineChangeTimeMs) / 600)

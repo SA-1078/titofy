@@ -40,7 +40,11 @@ DEFAULTS = {
     "api": {
         "host": "127.0.0.1",
         "port": 8642,
-        "auto_start": False,
+        "auto_start": True,
+    },
+    "lyrics": {
+        "default_mode": "auto",
+        "auto_start_api": True,
     },
     "batch": {
         "max_workers": 2,
@@ -72,13 +76,14 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def get_config(config_path: str = None) -> dict:
+def get_config(config_path: str | None = None) -> dict:
     """
     Lee config.yaml y lo merga con los defaults.
     Si config.yaml no existe, retorna los defaults puros.
     """
     if config_path is None:
         config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+
 
     if os.path.exists(config_path):
         try:

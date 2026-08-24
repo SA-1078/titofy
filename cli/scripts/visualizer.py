@@ -26,16 +26,18 @@ except ImportError:
     sys.exit(1)
 
 try:
-    import sounddevice as sd
+    import sounddevice as sd  # type: ignore[import-untyped, import-not-found]
 except ImportError:
     sd = None
 
+
 try:
-    from rich.console import Console
-    from rich.text import Text
+    from rich.console import Console  # type: ignore[import-untyped, import-not-found]
+    from rich.text import Text  # type: ignore[import-untyped, import-not-found]
     console = Console()
 except ImportError:
     console = None
+
 
 
 # ─── Configuración ─────────────────────────────────────────────────────────────

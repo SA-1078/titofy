@@ -71,6 +71,25 @@ function saveMusicFolder(folderPath) {
   } catch { /* ignorar errores de escritura */ }
 }
 
+/**
+ * Lee la configuración de letras desde config.yaml.
+ */
+function getLyricsConfig() {
+  const defaults = { default_mode: "auto", auto_start_api: true };
+  try {
+    if (!fs.existsSync(CONFIG_YAML_PATH)) return defaults;
+    const content = fs.readFileSync(CONFIG_YAML_PATH, "utf-8");
+    const modeMatch = content.match(/^\s*default_mode:\s*"?([^"\n]+)"?/m);
+    const autoStartMatch = content.match(/^\s*auto_start_api:\s*(true|false)/m);
+    return {
+      default_mode: modeMatch ? modeMatch[1].trim() : "auto",
+      auto_start_api: autoStartMatch ? autoStartMatch[1] === "true" : true,
+    };
+  } catch {
+    return defaults;
+  }
+}
+
 // Asegurar que la carpeta lrc/ exista
 if (!fs.existsSync(LRC_DIR)) fs.mkdirSync(LRC_DIR, { recursive: true });
 
@@ -149,5 +168,6 @@ module.exports = {
   scanFolder,
   loadSavedMusicFolder,
   saveMusicFolder,
+  getLyricsConfig,
 };
 

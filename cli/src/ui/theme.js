@@ -32,7 +32,7 @@ function clear() {
   process.stdout.write("\x1b[H\x1b[J");
 }
 
-function header(subtitle = "IA offline para letras sincronizadas", clearScreen = false) {
+function header(subtitle = "IA offline para letras sincronizadas", clearScreen = true) {
   if (clearScreen) {
     clear();
   }

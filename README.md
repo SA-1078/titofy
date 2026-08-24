@@ -1,49 +1,103 @@
-# 🎵 Titofy v2.1 — Suite Multimedia Offline de Letras Sincronizadas
+# 🎵 Titofy v2.2 — Suite de Letras Sincronizadas y Motor Híbrido
 
-**Titofy** es una suite 100% local y offline para transcribir, sincronizar y reproducir letras de canciones usando inteligencia artificial (ecosistema Whisper acelerado por hardware), reproducirlas al ritmo de la música y visualizar el espectro de audio en tiempo real.
+**Titofy** es una herramienta para obtener, calibrar, transcribir y reproducir letras de canciones (`.lrc`) sincronizadas con archivos locales de audio, además de incluir un visualizador espectral en tiempo real.
 
 Incluye:
-- **Interfaz CLI (Terminal TUI)**: Reproductor de letras sincronizadas estilo Spotify + Visualizador Espectral ASCII de 112 bandas Truecolor.
-- **Motor de IA Local & API FastAPI**: Transcripción acelerada por hardware con `faster-whisper` (CTranslate2), modelo `turbo`, Forced Alignment y microservicio HTTP local (`http://127.0.0.1:8642/docs`).
-- **Aplicación Desktop (Flutter)**: Interfaz gráfica nativa inicial para Linux y Windows (en etapa temprana de desarrollo con UI básica, `media_kit` y `NavRail`).
-
-**Todo se procesa en tu propio ordenador. Nada se sube a internet.**
+- **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor.
+- **Motor Híbrido & API FastAPI**: Búsqueda remota (LRCLIB / Lyrics.ovh), calibración mediante **Forced Alignment** y transcripción offline con **faster-whisper** (CTranslate2) en GPU/CPU.
+- **App Desktop (Flutter)**: Interfaz gráfica nativa para Linux y Windows (en desarrollo).
 
 ---
 
-## ✨ ¿Qué hay de nuevo en la v2.1?
+## ✨ Novedades en v2.2
 
-La versión **2.1** introduce mejoras significativas de físicas de sonido, usabilidad en terminal y experiencia limpia de interfaz respecto a la v2.0:
+La versión 2.2 implementa una arquitectura híbrida de resolución en 3 niveles, normalización de metadatos multi-artista y alineación por palabra para evitar desfases temporales.
 
-### 🌊 Visualizador Espectral FFT de 112 Bandas (Truecolor)
-- Físicas de audio diferenciadas entre graves (`0-30%`) y medios/agudos (`70%`).
-- **Difusión Lateral en Graves (`BASS_DIFFUSION: 0.22`)**: Suavizado horizontal entre barras vecinas para romper la forma rectangular rígida.
-- **Extracción Mixta `75% MAX + 25% AVG`**: Respuesta con *punch* instantáneo en los bombos sin saturar ni pegarse al techo.
-- **Respuesta de Ola en Medios y Agudos**: Movimiento fluido estilo olas a 30 FPS (`ATTACK: 0.97`, `DECAY: 0.72`).
-
-### ⚡ Interfaz CLI Limpia sin Desplazamiento
-- Fix de secuencias ANSI en `alt-screen.js` y `theme.js`. El encabezado `>> TITOFY CLI` permanece fijo en la fila 1 sin requerir scroll hacia arriba al iniciar o navegar.
-
-### 🔇 Silenciamiento Estricto de Logs & Barra de Progreso Única
-- Ocultamiento de logs informativos técnicos de consola (redirigidos a `logs/titofy-YYYY-MM-DD.log`).
-- Eliminación de barras nativas molestas de `tqdm` y Whisper.
-- **Barra de progreso interactiva de 1 sola línea**: `→ Transcribiendo  ████████████░░░░░░░░  58%  ·  1:47 restantes`.
-
-### 🎨 Score de Confianza Dinámico
-- Tarjeta final de resultados con puntuación de precisión por código de color: Verde (≥ 80%), Amarillo (60-79%), Rojo (< 60%).
-
-### ⚙️ Carga de CUDA
-- Módulo `soporte_para_cuda.py` para detección y carga dinámica de DLLs de NVIDIA CUDA (cuBLAS, cuDNN) en el entorno virtual `.venv`.
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 PIPELINE DE RESOLUCIÓN                                 │
+│                                                                                        │
+│   [Audio Local] ──► Normalizador Multi-Artista ──► Generación de 5 Consultas           │
+│                              │                                                         │
+│       ┌──────────────────────┴──────────────────────┐                                  │
+│       ▼                                             ▼                                  │
+│  [NIVEL 1: LRCLIB]                             [NIVEL 2: Lyrics.ovh]                   │
+│  Sincronización remota (<0.5s)                 Texto plano                             │
+│       │                                             │                                  │
+│       └──────────────────────┬──────────────────────┘                                  │
+│                              ▼                                                         │
+│               [CALIBRACIÓN: Forced Alignment]                                          │
+│               Alineación de texto plano con el audio local (~1.5s)                     │
+│                              │ (Si no hay coincidencias online)                        │
+│                              ▼                                                         │
+│               [NIVEL 3: Whisper Local (Offline)]                                       │
+│               Transcripción completa con faster-whisper                                │
+│                              │                                                         │
+│                              ▼                                                         │
+│               [Archivo .lrc local]                                                     │
+└────────────────────────────────────────────────────────────────────────────────────────┘
+```
 
 ---
 
-## 🚦 Estado Actual de los Módulos v2.1
+## ⚙️ Arquitectura del Motor Híbrido
 
-| Módulo | Estado | Recomendado para uso diario | Descripción |
-| :--- | :--- | :---: | :--- |
-| **Titofy CLI (Node.js)** | 🟢 Estable y funcional | **Sí** | Experiencia TUI completa, reproductor y visualizador espectral. |
-| **Backend (Python)** | 🟢 Estable y funcional | **Sí** | Motor `faster-whisper`, API FastAPI y Forced Alignment. |
-| **Titofy Desktop App (Flutter)** | 🟡 En desarrollo (UI básica) | Experimental | Primera versión gráfica nativa para Linux y Windows (en progreso). |
+### Niveles de Resolución
+
+| Nivel | Método | Tiempo estimado (GPU) | Comportamiento |
+| :---: | :--- | :---: | :--- |
+| **1** | **LRCLIB** | `< 0.5s` | Descarga timestamps listos. Se activa en primera instancia. |
+| **2** | **Lyrics.ovh + Forced Alignment** | `~ 1.5s` | Si solo existe letra en texto plano, Whisper alinea cada línea con el audio local. |
+| **3** | **Whisper Local** | `~ 2-5s` | Fallback offline si la pista no existe en las APIs remotas. |
+
+- **Nivel 1 (LRCLIB)**: Búsqueda estricta y difusa en endpoints `/api/get` y `/api/search`. Genera el archivo `.lrc` directamente si hay coincidencia temporal.
+- **Nivel 2 (Lyrics.ovh + Forced Alignment)**: Obtiene la letra en texto plano y ejecuta `stable-whisper` localmente para calcular los timestamps reales del archivo del usuario, omitiendo intros o diferencias de versiones.
+- **Nivel 3 (Transcripción pura)**: `faster-whisper` (CTranslate2) transcribe el audio completo y aplica filtros (`hallucination.py`) para descartar repeticiones erróneas.
+
+---
+
+### Normalización de Nombres ([normalizer.py](backend/lyrics/normalizer.py))
+
+Limpia metadatos y genera variantes de búsqueda para evitar fallos por nombres de archivos provenientes de rips o YouTube:
+
+1. **Limpieza de etiquetas**: Remueve tags de resolución y tipo (`[Official Video]`, `(1080p)`, `[320kbps]`, `(En Vivo)`, etc.).
+2. **Separación de artistas**: Parsea patrones como `_`, `,`, `&` y `ft.` (`"Silvestre Dangond_ NATTI NATASHA"` ➔ `["Silvestre Dangond", "NATTI NATASHA"]`).
+3. **Generación de consultas ordenadas**:
+   ```text
+   Archivo: "Silvestre Dangond_ NATTI NATASHA - Justicia (Official Video).mp3"
+     1. "Silvestre Dangond" + "Justicia"
+     2. "Silvestre Dangond, NATTI NATASHA" + "Justicia"
+     3. "Silvestre Dangond & NATTI NATASHA" + "Justicia"
+     4. "NATTI NATASHA" + "Justicia"
+     5. "Justicia Silvestre Dangond"
+   ```
+
+---
+
+### Alineación de Estrofas ([align.py](backend/whisper_engine/align.py))
+
+Para evitar que Whisper colapse varias líneas cortas en un solo renglón largo por pausas acústicas, el método `map_words_to_original_lines()`:
+- Extrae marcas de tiempo a nivel de palabra.
+- Mapea el inicio del verso al timestamp de la primera palabra detectada, conservando los saltos de línea del texto original.
+- Inserta una etiqueta `[00:00.00] (intro)` si detecta silencios o secciones instrumentales superiores a 8 segundos al inicio.
+
+---
+
+### Manejo de Estado en Disco
+
+- Se eliminó el almacenamiento en base de datos SQLite intermedia (`lyrics_cache.db`).
+- El archivo `.lrc` local junto a la pista es la única referencia del sistema.
+- La opción de regeneración sobreescribe directamente el archivo `.lrc` existente mediante una nueva consulta o recalibración.
+
+---
+
+## 🚦 Estado de los Módulos
+
+| Módulo | Estado | Descripción |
+| :--- | :---: | :--- |
+| **Titofy CLI (Node.js)** | 🟢 Estable | Menú interactivo, reproductor con scroll y visualizador FFT. |
+| **Backend (Python)** | 🟢 Estable | Motor híbrido, Forced Alignment, faster-whisper y API FastAPI. |
+| **Titofy Desktop (Flutter)** | 🟡 Desarrollo | Interfaz gráfica nativa (en progreso). |
 
 ---
 
@@ -51,51 +105,46 @@ La versión **2.1** introduce mejoras significativas de físicas de sonido, usab
 
 ```text
 titofy/
-├── backend/                     → Motor de IA y API local (Python 3.11+)
-│   ├── api_server.py            → Microservicio FastAPI (http://127.0.0.1:8642/docs)
-│   ├── whisper_transcribe.py    → Transcripción offline con faster-whisper
-│   ├── whisper_align.py         → Forced Alignment (Alineamiento maestro)
-│   ├── lyrics_postprocess.py    → Limpieza anti-alucinaciones y duplicados
-│   ├── music_detector.py        → Detección de secciones musicales
-│   ├── soporte_para_cuda.py     → Carga de DLLs CUDA/cuBLAS en .venv
-│   ├── logger.py                → Logging filtrado (consola limpia / archivo exhaustivo)
-│   ├── config.yaml              → Configuración centralizada
+├── backend/                     → API local y motor IA (Python 3.11+)
+│   ├── api_server.py            → Servidor FastAPI (http://127.0.0.1:8642/docs)
+│   ├── whisper_transcribe.py    → Transcripción CLI offline
+│   ├── whisper_align.py         → Forced Alignment CLI
+│   ├── lyrics/                  → Resolución de letras y normalización
+│   │   ├── resolver.py          → Orquestador de los 3 niveles
+│   │   ├── normalizer.py        → Limpieza de tags y generación de variantes
+│   │   ├── models.py            → Modelos Pydantic
+│   │   └── providers/           → Clientes LRCLIB y Lyrics.ovh
+│   ├── whisper_engine/          → Carga de modelos y alineación temporal
+│   ├── postprocess/             → Filtros anti-alucinación
+│   ├── config.yaml              → Configuración general
 │   └── requirements.txt
 │
-├── cli/                         → Interfaz de terminal Titofy CLI (Node.js)
-│   ├── index.js                 → Punto de entrada unificado CLI
-│   ├── generate-lrc.js          → Generador de letras por CLI
-│   ├── scripts/visualizer.py    → Motor visualizador Python
+├── cli/                         → Interfaz de terminal (Node.js)
+│   ├── index.js                 → Punto de entrada CLI
+│   ├── generate-lrc.js          → Generador manual vía terminal
 │   ├── src/
-│   │   ├── ascii-player/        → Visualizador FFT de 112 bandas (Truecolor RGB)
-│   │   ├── player.js            → Reproductor TUI con scroll continuo Spotify
-│   │   └── ui/                  → Menú interactivo TUI (menu-core.js, alt-screen.js)
+│   │   ├── ascii-player/        → Visualizador FFT de 112 bandas
+│   │   ├── player.js            → Reproductor con scroll sincronizado
+│   │   ├── api-client.js        → Cliente HTTP para FastAPI
+│   │   └── ui/                  → Menús y lógica de terminal
 │   └── package.json
 │
-├── desktop/                     → Aplicación de escritorio nativa Titofy Desktop App (Flutter)
-│   ├── lib/                     → Vistas, reproductor media_kit y shell NavRail
-│   ├── pubspec.yaml
-│   └── ...                      → (UI gráfica inicial - en desarrollo)
-│
-├── lrc/                         → Almacenamiento de letras generadas (.lrc)
-├── logs/                        → Logs del sistema (titofy-YYYY-MM-DD.log)
+├── desktop/                     → Aplicación Flutter (Linux / Windows)
 └── README.md
 ```
 
 ---
 
-## ⚙️ Requisitos del Sistema
+## ⚙️ Requisitos
 
-| Requisito | Versión mínima | Para qué |
-| :--- | :--- | :--- |
-| **Node.js** | v18+ | Titofy CLI, menú interactivo y reproductor de terminal |
-| **Python** | v3.9+ (recomendado 3.11+) | Motor de transcripción Whisper e IA local |
-| **Flutter** | v3.19+ | Titofy Desktop App (solo si vas a compilar la app gráfica) |
-| **FFmpeg** | v4.4+ | Extracción de audio y reproducción con ffplay |
+- **Node.js**: v18+
+- **Python**: v3.10+ (recomendado 3.11+)
+- **FFmpeg / ffplay**: v4.4+
+- **Flutter**: v3.19+ (opcional, solo para compilar desktop)
 
 ---
 
-## 🚀 Instalación Completa
+## 🚀 Instalación
 
 ### 1. Clonar el repositorio
 
@@ -104,204 +153,80 @@ git clone https://github.com/tu-usuario/titofy.git
 cd titofy
 ```
 
-### 2. Configurar el Backend (Python)
+### 2. Backend (Python)
 
 ```bash
 cd backend
 python3 -m venv .venv
-
-# Linux / macOS
-source .venv/bin/activate
-
-# Windows
-.venv\Scripts\activate
-
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Configurar la CLI (Node.js)
+### 3. CLI (Node.js)
 
 ```bash
 cd ../cli
 npm install
 ```
 
-### 4. (Opcional) Configurar la App Desktop (Flutter)
+### 4. Dependencias del sistema (FFmpeg)
 
 ```bash
-cd ../desktop
-flutter pub get
-flutter run -d linux   # o -d windows
-```
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y ffmpeg
 
-> *Nota: La App Desktop se encuentra en etapa temprana. Se recomienda usar la CLI para uso diario.*
-
-### 5. Instalar FFmpeg (si no lo tienes)
-
-```bash
-# Windows (con winget)
+# Windows
 winget install Gyan.FFmpeg
-
-# Linux (Ubuntu/Debian)
-sudo apt install ffmpeg
-```
-
-Verifica la instalación:
-```bash
-ffplay -version
 ```
 
 ---
 
-## 🎮 Cómo Usar
+## 🎮 Uso
 
-### Opción 1: Menú CLI Interactivo (Recomendado)
+Iniciar el menú interactivo:
 
 ```bash
 cd cli
 npm start
 ```
 
-El menú te permite:
-- 📁 Explorar tu carpeta de música (`.mp3`, `.wav`, `.m4a`, `.flac`, `.mp4`, `.mkv`).
-- 🤖 Generar letras con IA local (elige el modelo).
-- ▶️ Reproducir canciones con letras sincronizadas y scroll estilo Spotify.
-- 🌈 Visualizar el espectro animado de audio de 112 bandas Truecolor.
-- 🚀 Procesar varias canciones en lote.
-- 🎯 Usar Forced Alignment (sincronización con letras `.txt`).
-
-### Opción 2: Generar letras por CLI (Directo)
-
-```bash
-cd cli
-node generate-lrc.js "ruta/a/cancion.mp3" --language es --model turbo
-```
-
 Opciones principales:
-- `--model` / `-m` → `turbo`, `small` o `base`
-- `--language` / `-l` → `es`, `en`, `pt`, etc.
-- `--output` / `-o` → nombre del archivo `.lrc` de salida
-
-### Opción 3: Forced Alignment (Sincronizar letra existente)
-
-```bash
-cd backend
-python whisper_align.py audio.mp3 --lyrics letra.txt --language es
-```
-
-### Opción 4: API Local (FastAPI)
-
-```bash
-cd backend
-python api_server.py
-```
-
-Documentación interactiva disponible en: `http://127.0.0.1:8642/docs`
-
-Endpoints principales:
-- `POST /transcribe` → Transcribir y sincronizar audio desde cero.
-- `POST /align` → Realizar Forced Alignment.
-- `POST /postprocess` → Limpiar un `.lrc` generado.
-- `GET /health` → Estado del servidor y detección de hardware (CPU/GPU).
+- **Escaneo y sincronización**: Búsqueda y descarga automática de `.lrc`.
+- **Transcripción offline**: Selección de modelos Whisper (`base`, `small`, `turbo`).
+- **Forced Alignment**: Alineación de un `.txt` arbitrario contra un audio local.
+- **Reproductor TUI**: Modo clásico de terminal o visualizador FFT de 112 bandas.
+- **Procesamiento por lotes**: Generación desatendida para directorios completos.
 
 ---
 
-## 🤖 Modelos de Whisper Disponibles
+## 🤖 Rendimiento de Modelos Whisper
 
-| Modelo | Precisión | Velocidad (CPU int8)* | RAM aprox. | Tamaño Descarga | Descripción |
-| :--- | :---: | :---: | :---: | :---: | :--- |
-| **`base`** | ⭐⭐ | ~10s / canción | ~1 GB | ~139 MB | El rápido: ideal para pruebas o borradores. |
-| **`small`** | ⭐⭐⭐ | ~20-30s / canción | ~2 GB | ~461 MB | El bueno: balance diario recomendado. |
-| **`turbo`** | ⭐⭐⭐⭐⭐ | ~30-40s / canción | ~4 GB | ~809 MB | **Recomendado (SOTA)**: Calidad de `large-v3` a la velocidad de `small`. |
-
-*\* Tiempos estimados para una canción de ~3 minutos usando `faster-whisper` en CPU (`int8`). En GPU NVIDIA CUDA los tiempos bajan a menos de 5 segundos.*
+| Modelo | Parámetros | VRAM / RAM | Tiempo en GPU (pista 3.5 min) | Tiempo en CPU (int8) |
+| :--- | :---: | :---: | :---: | :---: |
+| **`base`** | 74M | ~1 GB | ~1-2s | ~10s |
+| **`small`** | 244M | ~2 GB | ~2-4s | ~20s |
+| **`turbo`** | 809M | ~4 GB | ~3-5s | ~30s |
 
 ---
 
-## 🧹 Post-Procesador de Letras
+## 🔧 Endpoints FastAPI
 
-El post-procesador `lyrics_postprocess.py` se ejecuta automáticamente tras cada transcripción y corrige:
-
-| Problema | Acción Realizada | Ejemplo |
-| :--- | :--- | :--- |
-| **Repeticiones internas** | Se reducen a una sola aparición | `lo que se fue ×20` → `lo que se fue` |
-| **Duplicados consecutivos** | Se eliminan líneas idénticas | 3 líneas iguales → 1 sola |
-| **Duplicados fuzzy (85%+)** | Se unifican variaciones mínimas | Ajuste de frases similares |
-| **Alucinaciones de Whisper** | Se eliminan textos de relleno | `"Gracias por ver"`, `"Suscríbete"` |
-| **Timestamps imposibles** | Se filtran intervalos incoherentes | Segmentos >30s con poco texto |
-
----
-
-## 📄 Formato .lrc
-
-Los archivos `.lrc` generados o creados manualmente siguen el estándar:
-
-```lrc
-[ti:Nombre de la canción]
-[ar:Artista]
-[00:01.00]Primera línea de la letra
-[00:05.50]Segunda línea
-[00:10.00]♪
-```
-
----
-
-## 🔧 Solución de Problemas
-
-| Error | Solución |
-| :--- | :--- |
-| `Python no encontrado` | Instala Python 3.9+ desde python.org |
-| `ffplay no encontrado` | Instala FFmpeg (`winget install Gyan.FFmpeg` o `sudo apt install ffmpeg`) |
-| `ModuleNotFoundError` | Activa el entorno `.venv` e instala `pip install -r requirements.txt` |
-| `Letras con muchos errores` | Usa `--language es` para forzar el idioma deseado |
-| `La App Desktop no compila` | Ejecuta `flutter doctor` en la carpeta `desktop/` para verificar dependencias de Flutter |
-
----
-
-## 🌐 Ruta de Desarrollo (Roadmap)
-
-### ✅ Completado hasta v2.0
-- Motor de transcripción offline con `faster-whisper` (CTranslate2).
-- CLI completa con menú interactivo TUI y reproductor estilo Spotify.
-- Forced Alignment y microservicio API local en FastAPI.
-- Reestructuración a Monorepo (`backend/`, `cli/`, `desktop/`).
-
-### ✨ Nuevo en v2.1
-- [x] Visualizador espectral FFT de 112 bandas en Truecolor ANSI con difusión lateral en graves.
-- [x] Corrección de viewport en terminal TUI (encabezado fijo sin scroll hacia arriba).
-- [x] Barra de progreso única interactiva y silenciamiento de logs técnicos en consola.
-- [x] Tarjeta de resultados con scores de confianza por colores.
-- [x] Módulo `soporte_para_cuda.py` para carga limpia de DLLs de NVIDIA CUDA.
-
-### 🚧 En desarrollo / Próximamente
-- [ ] Mejora y estabilización progresiva de la App Desktop (Flutter).
-- [ ] Empaquetado e instaladores sencillos.
-- [ ] Modo híbrido opcional (búsqueda de letras online + fallback local).
-
----
-
-## 📌 Notas Importantes de la v2.1
-
-1. Esta versión mantiene y perfecciona la **arquitectura Monorepo** (`backend/`, `cli/`, `desktop/`).
-2. La CLI y el Backend son el núcleo maduro y recomendado para el uso diario.
-3. La App Desktop nativa en Flutter está en desarrollo temprano (UI básica) y se irá mejorando en futuras entregas.
+La API corre por defecto en `http://127.0.0.1:8642` (documentación en `/docs`):
+- `POST /lyrics/resolve` — Ejecuta el pipeline de resolución en 3 niveles.
+- `POST /transcribe` — Transcripción directa de audio con Whisper.
+- `POST /align` — Forced alignment entre audio y texto provisto.
+- `POST /postprocess` — Filtro y limpieza de timestamps en archivos `.lrc`.
+- `GET /health` — Estado del servicio y disponibilidad de GPU/CUDA.
 
 ---
 
 ## 🤝 Licencia
 
-Este proyecto está licenciado bajo la **GNU General Public License v3.0 (GPL-3.0)**.
-
-Eso significa que puedes usar, modificar y distribuir el programa, pero si lo distribuyes debes:
-
-- Dar crédito al autor original
-- Publicar el código fuente de tu versión
-- Mantener la misma licencia GPL
-
-Consulta el archivo [LICENSE](LICENSE) para el texto completo.
+Este proyecto está licenciado bajo la **Licencia Pública General GNU v3.0 (GPL-3.0)**.
+Consulta el archivo [LICENSE](LICENSE) para más detalles.
 
 ---
-*Titofy v2.1 — De la terminal al escritorio, offline y bajo tu control.*
 
-Titofy - Santiago Colimba.
-Todos los derechos reservados ©2026.
+*Titofy v2.2 — Letras sincronizadas con la velocidad de la nube y la potencia de tu GPU local.*
+
+Titofy - Santiago Colimba. Todos los derechos reservados ©2026.
