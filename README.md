@@ -1,160 +1,232 @@
-# Titofy (v2.2)
+# 🎵 Titofy v2.2 — Suite de Letras Sincronizadas y Motor Híbrido
 
-Titofy es un reproductor y generador de letras sincronizadas (.lrc) para la terminal. Funciona de forma híbrida: busca letras oficiales en internet y las sincroniza con tu archivo de audio local usando Whisper (IA), o transcribe canciones desde cero de forma 100% offline.
+**Titofy** es una herramienta para obtener, calibrar, transcribir y reproducir letras de canciones (`.lrc`) sincronizadas con archivos locales de audio, además de incluir un visualizador espectral en tiempo real.
 
 Incluye:
-- **CLI / TUI**: Menú interactivo, reproductor con sincronización de letras y visualizador de espectro de audio (FFT de 112 bandas).
-- **Motor Híbrido & Backend**: Búsqueda en proveedores online (LRCLIB, Lyrics.ovh), alineación forzada (Forced Alignment) y transcripción local con `faster-whisper`.
-- **API FastAPI**: Microservicio local para procesar o consultar letras por HTTP (`http://127.0.0.1:8642`).
-- **Desktop (Flutter)**: Interfaz gráfica en desarrollo.
+- **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor.
+- **Motor Híbrido & API FastAPI**: Búsqueda remota (LRCLIB / Lyrics.ovh), calibración mediante **Forced Alignment** y transcripción offline con **faster-whisper** (CTranslate2) en GPU/CPU.
+- **App Desktop (Flutter)**: Interfaz gráfica nativa para Linux y Windows (en desarrollo).
 
 ---
 
-## Novedades de la v2.2
+## ✨ Novedades en v2.2
 
-### 1. Motor Híbrido de Letras (3 niveles)
-Cuando pides las letras de una canción en modo automático, el sistema sigue este orden:
+La versión 2.2 implementa una arquitectura híbrida de resolución en 3 niveles, normalización de metadatos multi-artista y alineación por palabra para evitar desfases temporales.
 
-```text
-1. LRCLIB (Online) ──────────► ¿Tiene letra sincronizada? ──► Descarga y calibra con tu audio.
-                                      │ (No)
-2. Lyrics.ovh (Online) ──────► ¿Tiene texto plano? ────────► Descarga texto y alinea con tu audio.
-                                      │ (No)
-3. Whisper (Local Offline) ──► Transcribe el audio desde cero con IA local.
+```
+┌────────────────────────────────────────────────────────────────────────────────────────┐
+│                                 PIPELINE DE RESOLUCIÓN                                 │
+│                                                                                        │
+│   [Audio Local] ──► Normalizador Multi-Artista ──► Generación de 5 Consultas           │
+│                              │                                                         │
+│       ┌──────────────────────┴──────────────────────┐                                  │
+│       ▼                                             ▼                                  │
+│  [NIVEL 1: LRCLIB]                             [NIVEL 2: Lyrics.ovh]                   │
+│  Sincronización remota (<0.5s)                 Texto plano                             │
+│       │                                             │                                  │
+│       └──────────────────────┬──────────────────────┘                                  │
+│                              ▼                                                         │
+│               [CALIBRACIÓN: Forced Alignment]                                          │
+│               Alineación de texto plano con el audio local (~1.5s)                     │
+│                              │ (Si no hay coincidencias online)                        │
+│                              ▼                                                         │
+│               [NIVEL 3: Whisper Local (Offline)]                                       │
+│               Transcripción completa con faster-whisper                                │
+│                              │                                                         │
+│                              ▼                                                         │
+│               [Archivo .lrc local]                                                     │
+└────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-- **Por qué se hace así**: Muchas letras de internet están sincronizadas con el video oficial de YouTube (que suele tener intros largas o diálogos). Al descargar el texto y calibrarlo con tu archivo local mediante *Forced Alignment* (~1.5s en GPU), las marcas de tiempo coinciden exactamente con tu archivo específico.
-- **Sin base de datos de caché**: Se eliminó SQLite (`lyrics_cache.db`). El archivo `.lrc` guardado en disco es la única referencia. Al elegir "Regenerar", el sistema siempre busca o procesa de forma limpia.
+---
 
-### 2. Formateador de nombres y múltiples artistas
-Los archivos descargados suelen tener nombres con ruido o formatos variados (`Artista1_ Artista2 - Cancion (Official Video)(1080P_HD).mp3`).
-- Limpia etiquetas de video, resolución y bitrate (`(1080P_HD)`, `[4K]`, `(MP3_160K)`, etc.).
-- Separa colaboradores por `_`, `,`, `&`, `x`, `feat`, `ft`.
-- Genera consultas alternativas automáticas (artista principal, colaboradores juntos, solo el segundo artista, título primero) para asegurar resultados en las APIs.
+## ⚙️ Arquitectura del Motor Híbrido
 
-### 3. Mapeo de estrofas y saltos de línea
-- En lugar de juntar versos según los silencios del audio, el alineador mapea las marcas de tiempo de Whisper directamente sobre las líneas del texto original.
-- Mantiene los saltos de línea y la estructura de estrofas intacta.
-- Detecta intros habladas o instrumentales largas (> 8s) y evita colocar letras sobre diálogos que no corresponden a la canción.
+### Niveles de Resolución
 
-### 4. Limpieza de terminal
-- Al salir con `Ctrl + C` o `Esc`, se limpian los buffers de la terminal y se cierran los procesos en segundo plano (`ffplay`, backend) sin dejar residuos en la pantalla.
+| Nivel | Método | Tiempo estimado (GPU) | Comportamiento |
+| :---: | :--- | :---: | :--- |
+| **1** | **LRCLIB** | `< 0.5s` | Descarga timestamps listos. Se activa en primera instancia. |
+| **2** | **Lyrics.ovh + Forced Alignment** | `~ 1.5s` | Si solo existe letra en texto plano, Whisper alinea cada línea con el audio local. |
+| **3** | **Whisper Local** | `~ 2-5s` | Fallback offline si la pista no existe en las APIs remotas. |
+
+- **Nivel 1 (LRCLIB)**: Búsqueda estricta y difusa en endpoints `/api/get` y `/api/search`. Genera el archivo `.lrc` directamente si hay coincidencia temporal.
+- **Nivel 2 (Lyrics.ovh + Forced Alignment)**: Obtiene la letra en texto plano y ejecuta `stable-whisper` localmente para calcular los timestamps reales del archivo del usuario, omitiendo intros o diferencias de versiones.
+- **Nivel 3 (Transcripción pura)**: `faster-whisper` (CTranslate2) transcribe el audio completo y aplica filtros (`hallucination.py`) para descartar repeticiones erróneas.
 
 ---
 
-## Estructura del proyecto
+### Normalización de Nombres ([normalizer.py](backend/lyrics/normalizer.py))
+
+Limpia metadatos y genera variantes de búsqueda para evitar fallos por nombres de archivos provenientes de rips o YouTube:
+
+1. **Limpieza de etiquetas**: Remueve tags de resolución y tipo (`[Official Video]`, `(1080p)`, `[320kbps]`, `(En Vivo)`, etc.).
+2. **Separación de artistas**: Parsea patrones como `_`, `,`, `&` y `ft.` (`"Silvestre Dangond_ NATTI NATASHA"` ➔ `["Silvestre Dangond", "NATTI NATASHA"]`).
+3. **Generación de consultas ordenadas**:
+   ```text
+   Archivo: "Silvestre Dangond_ NATTI NATASHA - Justicia (Official Video).mp3"
+     1. "Silvestre Dangond" + "Justicia"
+     2. "Silvestre Dangond, NATTI NATASHA" + "Justicia"
+     3. "Silvestre Dangond & NATTI NATASHA" + "Justicia"
+     4. "NATTI NATASHA" + "Justicia"
+     5. "Justicia Silvestre Dangond"
+   ```
+
+---
+
+### Alineación de Estrofas ([align.py](backend/whisper_engine/align.py))
+
+Para evitar que Whisper colapse varias líneas cortas en un solo renglón largo por pausas acústicas, el método `map_words_to_original_lines()`:
+- Extrae marcas de tiempo a nivel de palabra.
+- Mapea el inicio del verso al timestamp de la primera palabra detectada, conservando los saltos de línea del texto original.
+- Inserta una etiqueta `[00:00.00] (intro)` si detecta silencios o secciones instrumentales superiores a 8 segundos al inicio.
+
+---
+
+### Manejo de Estado en Disco
+
+- Se eliminó el almacenamiento en base de datos SQLite intermedia (`lyrics_cache.db`).
+- El archivo `.lrc` local junto a la pista es la única referencia del sistema.
+- La opción de regeneración sobreescribe directamente el archivo `.lrc` existente mediante una nueva consulta o recalibración.
+
+---
+
+## 🚦 Estado de los Módulos
+
+| Módulo | Estado | Descripción |
+| :--- | :---: | :--- |
+| **Titofy CLI (Node.js)** | 🟢 Estable | Menú interactivo, reproductor con scroll y visualizador FFT. |
+| **Backend (Python)** | 🟢 Estable | Motor híbrido, Forced Alignment, faster-whisper y API FastAPI. |
+| **Titofy Desktop (Flutter)** | 🟡 Desarrollo | Interfaz gráfica nativa (en progreso). |
+
+---
+
+## 📁 Estructura del Proyecto
 
 ```text
 titofy/
-├── backend/                     → Motor Python (Whisper, alineación, API)
-│   ├── api_server.py            → Servidor FastAPI local
-│   ├── lyrics/                  → Motor híbrido y proveedores online
-│   │   ├── resolver.py          → Resolución jerárquica (3 niveles)
-│   │   ├── normalizer.py        → Limpieza de nombres y permutaciones
-│   │   └── providers/           → LRCLIB y Lyrics.ovh
-│   ├── whisper_engine/          → Transcripción y Forced Alignment
-│   │   ├── align.py             → Alineación de texto con audio
-│   │   └── transcribe.py        → Transcripción por segmentos
-│   ├── postprocess/             → Filtros de texto y repeticiones
+├── backend/                     → API local y motor IA (Python 3.11+)
+│   ├── api_server.py            → Servidor FastAPI (http://127.0.0.1:8642/docs)
+│   ├── whisper_transcribe.py    → Transcripción CLI offline
+│   ├── whisper_align.py         → Forced Alignment CLI
+│   ├── lyrics/                  → Resolución de letras y normalización
+│   │   ├── resolver.py          → Orquestador de los 3 niveles
+│   │   ├── normalizer.py        → Limpieza de tags y generación de variantes
+│   │   ├── models.py            → Modelos Pydantic
+│   │   └── providers/           → Clientes LRCLIB y Lyrics.ovh
+│   ├── whisper_engine/          → Carga de modelos y alineación temporal
+│   ├── postprocess/             → Filtros anti-alucinación
+│   ├── config.yaml              → Configuración general
 │   └── requirements.txt
 │
-├── cli/                         → Interfaz de terminal en Node.js
+├── cli/                         → Interfaz de terminal (Node.js)
 │   ├── index.js                 → Punto de entrada CLI
+│   ├── generate-lrc.js          → Generador manual vía terminal
 │   ├── src/
-│   │   ├── ascii-player/        → Visualizador espectral de 112 bandas
-│   │   ├── player.js            → Reproductor de terminal
-│   │   └── ui/                  → Menús y acciones
+│   │   ├── ascii-player/        → Visualizador FFT de 112 bandas
+│   │   ├── player.js            → Reproductor con scroll sincronizado
+│   │   ├── api-client.js        → Cliente HTTP para FastAPI
+│   │   └── ui/                  → Menús y lógica de terminal
 │   └── package.json
 │
-├── desktop/                     → App gráfica en Flutter (en desarrollo)
+├── desktop/                     → Aplicación Flutter (Linux / Windows)
 └── README.md
 ```
 
 ---
 
-## Requisitos
+## ⚙️ Requisitos
 
-- **Node.js**: v18 o superior.
-- **Python**: 3.10 o superior (recomendado 3.11/3.12).
-- **FFmpeg**: Instalado y disponible en el PATH del sistema (`ffmpeg` y `ffplay`).
+- **Node.js**: v18+
+- **Python**: v3.10+ (recomendado 3.11+)
+- **FFmpeg / ffplay**: v4.4+
+- **Flutter**: v3.19+ (opcional, solo para compilar desktop)
 
 ---
 
-## Instalación
+## 🚀 Instalación
 
 ### 1. Clonar el repositorio
+
 ```bash
 git clone https://github.com/tu-usuario/titofy.git
 cd titofy
 ```
 
-### 2. Configurar backend
+### 2. Backend (Python)
+
 ```bash
 cd backend
 python3 -m venv .venv
-
-# Linux / macOS:
-source .venv/bin/activate
-
-# Windows:
-.venv\Scripts\activate
-
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. Configurar CLI
+### 3. CLI (Node.js)
+
 ```bash
 cd ../cli
 npm install
 ```
 
+### 4. Dependencias del sistema (FFmpeg)
+
+```bash
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y ffmpeg
+
+# Windows
+winget install Gyan.FFmpeg
+```
+
 ---
 
-## Uso
+## 🎮 Uso
 
-### Iniciar la CLI
+Iniciar el menú interactivo:
+
 ```bash
 cd cli
 npm start
 ```
 
-Opciones disponibles en el menú:
-1. **Explorar música**: Escanea tu carpeta de música configurada.
-2. **Obtener letras (Modo Híbrido)**: Busca online, calibra con tu archivo y guarda el `.lrc`.
-3. **Generar solo con Whisper**: Transcripción offline eligiendo modelo (`base`, `small`, `turbo`).
-4. **Forced Alignment**: Sincroniza un `.txt` con tu audio.
-5. **Reproducir**: Modo normal o Visualizador ASCII espectral.
-
-### Modelos de Whisper
-
-| Modelo | Velocidad (GPU)* | Velocidad (CPU)* | RAM/VRAM | Uso |
-| :--- | :---: | :---: | :---: | :--- |
-| **`base`** | ~1-2s | ~10s | ~1 GB | Ideal para Forced Alignment y pruebas rápidas. |
-| **`small`** | ~2-4s | ~20s | ~2 GB | Buen balance de precisión para transcribir. |
-| **`turbo`** | ~3-5s | ~30s | ~4 GB | Mayor precisión para canciones complejas. |
-
-*\* Tiempos aproximados para audios de ~3.5 minutos.*
+Opciones principales:
+- **Escaneo y sincronización**: Búsqueda y descarga automática de `.lrc`.
+- **Transcripción offline**: Selección de modelos Whisper (`base`, `small`, `turbo`).
+- **Forced Alignment**: Alineación de un `.txt` arbitrario contra un audio local.
+- **Reproductor TUI**: Modo clásico de terminal o visualizador FFT de 112 bandas.
+- **Procesamiento por lotes**: Generación desatendida para directorios completos.
 
 ---
 
-## API Local
+## 🤖 Rendimiento de Modelos Whisper
 
-Para iniciar el servidor manualmente:
-```bash
-cd backend
-python api_server.py
-```
-
-Endpoints principales en `http://127.0.0.1:8642`:
-- `POST /lyrics/resolve`: Resuelve letras mediante el motor híbrido.
-- `POST /transcribe`: Transcribe un audio con Whisper.
-- `POST /align`: Alinea texto con un archivo de audio.
-- `GET /health`: Estado del servidor.
-
-Documentación interactiva disponible en `http://127.0.0.1:8642/docs`.
+| Modelo | Parámetros | VRAM / RAM | Tiempo en GPU (pista 3.5 min) | Tiempo en CPU (int8) |
+| :--- | :---: | :---: | :---: | :---: |
+| **`base`** | 74M | ~1 GB | ~1-2s | ~10s |
+| **`small`** | 244M | ~2 GB | ~2-4s | ~20s |
+| **`turbo`** | 809M | ~4 GB | ~3-5s | ~30s |
 
 ---
 
-## Licencia
+## 🔧 Endpoints FastAPI
 
-GNU General Public License v3.0 (GPL-3.0). Consulta el archivo [LICENSE](LICENSE) para más detalles.
+La API corre por defecto en `http://127.0.0.1:8642` (documentación en `/docs`):
+- `POST /lyrics/resolve` — Ejecuta el pipeline de resolución en 3 niveles.
+- `POST /transcribe` — Transcripción directa de audio con Whisper.
+- `POST /align` — Forced alignment entre audio y texto provisto.
+- `POST /postprocess` — Filtro y limpieza de timestamps en archivos `.lrc`.
+- `GET /health` — Estado del servicio y disponibilidad de GPU/CUDA.
+
+---
+
+## 🤝 Licencia
+
+Este proyecto está licenciado bajo la **Licencia Pública General GNU v3.0 (GPL-3.0)**.
+Consulta el archivo [LICENSE](LICENSE) para más detalles.
+
+---
+
+*Titofy v2.2 — Letras sincronizadas con la velocidad de la nube y la potencia de tu GPU local.*
+
+Titofy - Santiago Colimba. Todos los derechos reservados ©2026.
