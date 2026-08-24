@@ -40,30 +40,112 @@ La versión **2.2** revoluciona la forma en que Titofy obtiene y sincroniza las 
 └────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### 🌐 1. Motor Híbrido Multi-Fuente (3 Niveles Inteligentes)
-- **Nivel 1 (LRCLIB)**: Búsqueda instantánea de letras oficiales y sincronizadas en menos de 0.5 segundos.
-- **Nivel 2 (Lyrics.ovh + Forced Alignment)**: Si solo existe letra en texto plano, Titofy la descarga y ejecuta **Forced Alignment** con tu audio local para generar las marcas de tiempo automáticamente.
-- **Nivel 3 (Whisper IA Local)**: Si la canción es inédita o no existe en internet, el motor local de Whisper transcribe la pista desde cero con barra de progreso en vivo.
+---
 
-### 🎭 2. Formateador y Permutaciones de Búsqueda Multi-Artista
-- **Limpieza de Ruido de Ripeos**: Remueve automáticamente etiquetas de calidad y video como `(Official Video)`, `(1080P_HD)`, `(MP3_160K)`, `[4K]`, `[Remastered]`, etc.
-- **Detección de Colaboradores**: Separa artistas unidos por `_`, `,`, `/`, `|`, `&`, `y`, `x`, `feat.`, `ft.`, `with`.
-- **Generación de 5 Variantes Jerárquicas**: Consulta las APIs probando combinaciones prioritarias (Artista principal, colaboradores combinados con coma o `&`, colaboradores secundarios y búsquedas invertidas Título-Artista).
+## 🧠 Arquitectura Detallada del Motor Híbrido (Multi-Fuente & Calibración IA)
 
-### 🎼 3. Mapeo Perfecto de Estrofas y Saltos de Línea (`map_words_to_original_lines`)
-- **Preservación 100% de la Estructura Lírica**: Mapeo de timestamps a nivel de palabra que respeta los saltos de línea y estrofas musicales del texto oficial.
-- **Cero Versos Amontonados**: Elimina los bloques pegados y cortes arbitrarios a mitad de frase.
-- **Detección Inteligente de Intros de Video**: Inserta marcadores limpios `[00:00.00] (intro)` y suprime palabras fantasma en openings o escenas de diálogo de videoclips.
+### 💡 ¿Por qué un Motor Híbrido?
+Los sistemas tradicionales de letras enfrentan dos grandes problemas:
+1. **Bases de datos online comunitarias (LRCLIB, etc.)**: Son ultrarrápidas (< 0.5s) y tienen ortografía oficial perfecta, pero los tiempos sincronizados muchas veces fueron cronometrados sobre el **Video Oficial de YouTube** (que tiene diálogos o intros de 20-40s) o sobre una versión de álbum distinta a tu archivo local. Esto produce el molesto **desfase de estrofas**.
+2. **Transcripción por IA desde cero (Whisper puro)**: Sincroniza al 100% con tu archivo de audio local, pero toma más tiempo (15-30s) y puede alucinar en canciones con instrumentos densos o coros rápidos.
 
-### 🧹 4. Arquitectura Limpia sin Caché SQLite (Zero Dual-State)
-- **Eliminación Total de `lyrics_cache.db`**: El archivo `.lrc` físico en disco actúa como la única fuente de verdad natural.
-- **Regeneración 100% Determinista**: Al pulsar "Regenerar", el sistema siempre consulta proveedores frescos o recalibra con IA sin estados viejos congelados.
+**El Motor Híbrido de Titofy v2.2 une lo mejor de ambos mundos:**
+> Descarga la letra oficial de internet (100% libre de faltas ortográficas) y ejecuta **Forced Alignment** con Whisper en tu GPU local durante **~1.5 segundos**. Así adapta cada verso al milisegundo exacto donde suena en **tu archivo local específico**.
 
-### 🖥️ 5. Salida Atómica y Limpieza de Terminal
-- **Salida limpia con `Ctrl + C` o `Esc`**: Secuencias ANSI `\x1b[2J\x1b[3J\x1b[H` que limpian tanto la pantalla como el buffer de scrollback de la terminal.
-- **Cierre Seguro de Procesos**: Terminación inmediata de `ffplay` y servidores secundarios para no dejar memoria ni VRAM ocupada.
-- **Encabezados Dinámicos de Preview**: Avisos claros según el modo utilizado (`IA`, `Online`, `Alineadas`).
-- **Métricas 100% en Español**: `Nivel de confianza`, `Segmentos de baja confianza`, etc.
+---
+
+### 🔍 Los 3 Niveles de Resolución en Detalle
+
+| Nivel | Fuente / Método | Tiempo estimado | Ventaja Principal | Cuándo se activa |
+| :---: | :--- | :---: | :--- | :--- |
+| **Nivel 1** | **LRCLIB (Sincronizado)** | `< 0.5s` | Letras oficiales con timestamps de alta calidad. | Siempre en primer lugar (si existe match). |
+| **Nivel 2** | **Lyrics.ovh + Forced Alignment** | `~ 1.5s` (GPU) | Texto oficial en texto plano calibrado con tu audio local. | Si no hay timestamps en LRCLIB pero sí texto. |
+| **Nivel 3** | **Whisper IA Local (Offline)** | `~ 2-5s` (GPU) | 100% offline e independiente de internet; funciona con pistas inéditas. | Fallback si la canción no existe online. |
+
+#### 1. Nivel 1 — LRCLIB (Búsqueda Sincronizada Directa)
+* Consulta los endpoints `/api/get` (coincidencia estricta con tolerancia de duración) y `/api/search` (búsqueda difusa).
+* Si encuentra la canción con marcas de tiempo sincronizadas, las valida acústicamente y genera el `.lrc` al instante.
+
+#### 2. Nivel 2 — Lyrics.ovh + Forced Alignment Local
+* Si una canción no tiene letra sincronizada pero sí texto plano oficial, Titofy consulta `Lyrics.ovh` (`/suggest/{query}` y `/v1/{artist}/{title}`).
+* Envía el texto lírico limpio a `stable-whisper` en tu máquina local.
+* Whisper "escucha" tu archivo de audio y mapea cada verso a su marca temporal exacta, corrigiendo introducciones, solos y ritmos propios de tu archivo.
+
+#### 3. Nivel 3 — Whisper IA Local (Transcripción Completa)
+* Si no hay conexión o la canción no existe en ninguna base de datos online, se activa el motor local `faster-whisper` (CTranslate2).
+* Muestra una **barra de progreso interactiva en tiempo real** en la terminal.
+* Aplica filtros de post-procesamiento (`hallucination.py`) para eliminar repeticiones de coros o frases de relleno.
+
+---
+
+### 🎭 Formateador y Permutaciones Multi-Artista ([normalizer.py](backend/lyrics/normalizer.py))
+
+Los archivos de música descargados de YouTube suelen tener nombres desordenados, colaboraciones con formatos no estándar o etiquetas de bitrate. Titofy integra un pipeline de normalización en 3 pasos:
+
+#### 1. Limpieza de Ruido Publicitario y Formatos
+Elimina automáticamente cualquier variante de:
+* `(Official Video)`, `(Video Oficial)`, `(Music Video)`, `(Lyric Video)`
+* `(1080P_HD)`, `(720p_HD)`, `[4K]`, `[HD]`, `(MP3_160K)`, `[320kbps]`
+* `[Remastered]`, `(En Vivo)`, `[Live]`, etc.
+
+#### 2. Separador de Colaboradores (`split_artists`)
+Detecta y desglosa cualquier separador de colaboraciones:
+* Guiones bajos: `Silvestre Dangond_ NATTI NATASHA` ➔ `["Silvestre Dangond", "NATTI NATASHA"]`
+* Comas o Ampersands: `Chencho Corleone, Peso Pluma` / `Bizarrap & Shakira`
+* Feats: `Stalyn y sus Amigos ft. Karu Ñan` ➔ `["Stalyn y sus Amigos", "Karu Ñan"]`
+
+#### 3. Generación de 5 Variantes Jerárquicas (`generate_search_variations`)
+Para evitar fallos por discrepancias de nombre en las APIs, genera automáticamente 5 consultas ordenadas por prioridad:
+
+```text
+Ejemplo: "Silvestre Dangond_ NATTI NATASHA - Justicia (Official Video)(1080P_HD).mp3"
+  1. Artista Principal      : "Silvestre Dangond" + "Justicia"
+  2. Colaboradores con coma : "Silvestre Dangond, NATTI NATASHA" + "Justicia"
+  3. Colaboradores con &    : "Silvestre Dangond & NATTI NATASHA" + "Justicia"
+  4. Artista Secundario     : "NATTI NATASHA" + "Justicia"
+  5. Búsqueda Invertida     : "Justicia Silvestre Dangond"
+```
+
+---
+
+### 🎼 Preservación de Estrofas y Saltos de Línea ([align.py](backend/whisper_engine/align.py))
+
+Anteriormente, los motores de alineación agrupaban los versos según las pausas de respiración acústicas del cantante, amontonando 2 o 3 líneas en un solo renglón largo.
+
+Titofy v2.2 implementa el algoritmo **`map_words_to_original_lines()`**:
+1. **Extracción de Timestamps por Palabra**: Whisper extrae la marca de tiempo de cada palabra cantada.
+2. **Mapeo a la Estructura Lírica Oficial**: Cada verso del texto original recibe el segundo exacto donde comienza su primera palabra cantada.
+3. **Detección Inteligente de Intros de Video**: Si el videoclip incluye un opening cinematográfico o diálogo de más de 8 segundos antes de cantar, Titofy inserta un marcador `[00:00.00] (intro)` y suprime marcas de tiempo fantasma en los diálogos.
+
+#### Comparativa Real:
+```lrc
+❌ ANTES (Bloques amontonados):
+[02:17.40] pa' otro es nuevo  Déjame quitarte el maquillaje Déjame sentirte
+[02:23.50] y abrazarte Píntate la boca y ponte bella Quiero verte así como
+[02:28.70] eras antes Deja el sufrimiento en el espejo Coge tu cartera,
+
+✅ AHORA (Estrofas limpias y versos exactos):
+[02:13.42] Si te llamo, le haces relevo
+[02:15.94] Lo que es viejo pa' uno, pa' otro es nuevo
+[02:18.26] Déjame quitarte el maquillaje
+[02:21.92] Déjame sentirte y abrazarte
+[02:24.58] Píntate la boca y ponte bella
+[02:27.10] Quiero verte así como eras antes
+[02:29.58] Deja el sufrimiento en el espejo
+[02:32.36] Coge tu cartera, yo manejo
+[02:34.66] Cómplice la noche de nosotros dos
+```
+
+---
+
+### 🧹 Arquitectura Limpia sin Caché SQLite (Zero Dual-State)
+
+En versiones anteriores, la base de datos `lyrics_cache.db` guardaba resultados intermedios. Si una canción fallaba una vez o tenía un error de Whisper, la base de datos quedaba desactualizada y bloqueaba futuras consultas online.
+
+**En Titofy v2.2:**
+* Se eliminó por completo `lyrics_cache.db`.
+* **El archivo `.lrc` en tu disco es la única fuente de verdad**. Si existe el archivo `.lrc`, la canción está lista para reproducirse al instante (`[SYNC]`).
+* Cuando eliges **"Regenerar letras"**, el sistema siempre realiza una consulta fresca en tiempo real o recalibra con IA, sobreescribiendo el `.lrc` sin estados duplicados.
 
 ---
 
