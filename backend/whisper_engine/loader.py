@@ -144,7 +144,6 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
             selected_compute = compute_type
 
         log.info(f"Cargando faster-whisper ({model_name_fw}) en {device} ({selected_compute})...")
-        print(f"  ⚡ Usando motor optimizado faster-whisper ({selected_compute})")
 
         model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
         return model, True
