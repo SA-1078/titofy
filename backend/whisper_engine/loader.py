@@ -143,33 +143,47 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
     # 1. Intentar faster-whisper en el dispositivo seleccionado
+    if compute_type == "auto":
+        selected_compute = "float16" if device == "cuda" else "int8"
+    else:
+        selected_compute = compute_type
+
     try:
-        import stable_whisper
-
-        if compute_type == "auto":
-            selected_compute = "float16" if device == "cuda" else "int8"
-        else:
-            selected_compute = compute_type
-
-        log.info(f"Cargando faster-whisper ({model_name_fw}) en {device} ({selected_compute})...")
-        model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
-        return model, True
+        try:
+            import stable_whisper
+            log.info(f"Cargando faster-whisper via stable-ts ({model_name_fw}) en {device} ({selected_compute})...")
+            model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
+            return model, True
+        except ImportError:
+            from faster_whisper import WhisperModel
+            log.info(f"Cargando faster-whisper nativo ({model_name_fw}) en {device} ({selected_compute})...")
+            model = WhisperModel(model_name_fw, device=device, compute_type=selected_compute)
+            return model, True
 
     except Exception as e:
         log.warning(f"Fallo faster-whisper en {device}: {e}")
         # Si falló en CUDA, reintentar faster-whisper en CPU
         if device == "cuda":
             try:
-                import stable_whisper
-                log.info(f"Reintentando faster-whisper ({model_name_fw}) en CPU (int8)...")
-                model = stable_whisper.load_faster_whisper(model_name_fw, device="cpu", compute_type="int8")
-                return model, True
+                try:
+                    import stable_whisper
+                    log.info(f"Reintentando faster-whisper ({model_name_fw}) en CPU (int8)...")
+                    model = stable_whisper.load_faster_whisper(model_name_fw, device="cpu", compute_type="int8")
+                    return model, True
+                except ImportError:
+                    from faster_whisper import WhisperModel
+                    log.info(f"Reintentando faster-whisper nativo ({model_name_fw}) en CPU (int8)...")
+                    model = WhisperModel(model_name_fw, device="cpu", compute_type="int8")
+                    return model, True
             except Exception as e_cpu:
                 log.warning(f"Fallo faster-whisper en CPU: {e_cpu}")
 
     # 2. Fallback a PyTorch Whisper estándar
     try:
-        import stable_whisper as whisper
+        try:
+            import stable_whisper as whisper
+        except ImportError:
+            import whisper
         target_dev = device
         try:
             log.info(f"Cargando PyTorch Whisper ({model_name_std}) en {target_dev}...")

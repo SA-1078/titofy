@@ -11,6 +11,7 @@ import '../../core/services/locale_service.dart';
 import '../../core/services/database_service.dart';
 import '../visualizer/spectrum_controller.dart';
 import '../visualizer/spectrum_painter.dart';
+import '../visualizer/cli_rainbow_spectrum_painter.dart';
 import '../../shell/window_controls.dart';
 
 /// Reproductor Inmersivo con Modos Múltiples (Karaoke Continuo, Modo Clásico CLI y Espectro Neón FFT)
@@ -962,7 +963,7 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView> with SingleTick
                   animation: _spectrumController,
                   builder: (context, _) => CustomPaint(
                     size: const Size(double.infinity, 190),
-                    painter: _CliRainbowSpectrumPainter(
+                    painter: CliRainbowSpectrumPainter(
                       levels: _spectrumController.levels,
                       peaks: _spectrumController.peaks,
                       beatEnergy: _spectrumController.beatEnergy,
@@ -1503,77 +1504,3 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView> with SingleTick
   }
 }
 
-/// Dibuja el espectro de bloques arcoíris con picos blancos de retención (Idéntico a spectrum-renderer.js de la CLI)
-class _CliRainbowSpectrumPainter extends CustomPainter {
-  final List<double> levels;
-  final List<double> peaks;
-  final double beatEnergy;
-
-  _CliRainbowSpectrumPainter({
-    required this.levels,
-    required this.peaks,
-    required this.beatEnergy,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0 || levels.isEmpty) return;
-
-    // Colores arcoíris idénticos al visualizador ASCII de la CLI
-    const rainbowColors = [
-      Color(0xFF0077FF), // Azul en la base
-      Color(0xFF00B0FF), // Deep Cyan
-      Color(0xFF00E5FF), // Cyan neón
-      Color(0xFF00E676), // Verde esmeralda
-      Color(0xFF76FF03), // Lima
-      Color(0xFFFFEA00), // Amarillo
-      Color(0xFFFFAB00), // Ámbar
-      Color(0xFFFF6D00), // Naranja
-      Color(0xFFFF1744), // Rojo neón en la cima
-    ];
-
-    const int maxRows = 16;
-    const double rowSpacing = 2.0;
-    final double blockHeight = ((size.height - (maxRows * rowSpacing)) / maxRows).clamp(3.0, 14.0);
-    const double colSpacing = 3.5;
-
-    final int numCols = math.min(levels.length, 52);
-    final double totalSpacing = (numCols - 1) * colSpacing;
-    final double colWidth = ((size.width - totalSpacing) / numCols).clamp(3.0, 18.0);
-
-    final blockPaint = Paint()..style = PaintingStyle.fill;
-    final peakPaint = Paint()
-      ..color = Colors.white
-      ..style = PaintingStyle.fill;
-    final peakGlowPaint = Paint()
-      ..color = Colors.white.withOpacity(0.7)
-      ..maskFilter = const MaskFilter.blur(BlurStyle.normal, 3.0);
-
-    for (int col = 0; col < numCols; col++) {
-      final x = col * (colWidth + colSpacing);
-      final level = levels[col].clamp(0.02, 1.0);
-      final activeRows = (level * maxRows).round().clamp(1, maxRows);
-
-      // Bloques de color arcoíris (apilados de abajo hacia arriba)
-      for (int r = 0; r < activeRows; r++) {
-        final colorIdx = ((r / (maxRows - 1)) * (rainbowColors.length - 1)).round().clamp(0, rainbowColors.length - 1);
-        blockPaint.color = rainbowColors[colorIdx];
-
-        final y = size.height - ((r + 1) * (blockHeight + rowSpacing));
-        canvas.drawRect(Rect.fromLTWH(x, y, colWidth, blockHeight), blockPaint);
-      }
-
-      // Pico flotante blanco (Peak hold)
-      final peak = peaks[col].clamp(0.02, 1.0);
-      final peakRow = (peak * maxRows).round().clamp(1, maxRows);
-      final peakY = (size.height - (peakRow * (blockHeight + rowSpacing)) - blockHeight - 2.0).clamp(0.0, size.height - 4.0);
-
-      final peakRect = Rect.fromLTWH(x, peakY, colWidth, math.max(3.0, blockHeight * 0.75));
-      canvas.drawRect(peakRect, peakGlowPaint);
-      canvas.drawRect(peakRect, peakPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _CliRainbowSpectrumPainter oldDelegate) => true;
-}

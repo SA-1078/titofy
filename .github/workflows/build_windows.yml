@@ -40,7 +40,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          pip install fastapi "uvicorn[standard]" requests mutagen rapidfuzz pyyaml pydantic pyinstaller
+          pip install fastapi "uvicorn[standard]" requests mutagen rapidfuzz pyyaml pydantic pyinstaller faster-whisper stable-ts huggingface-hub
           cd backend
           python -m PyInstaller --noconfirm --onefile --console --name api_server `
             --hidden-import uvicorn.logging `
@@ -51,8 +51,13 @@ jobs:
             --hidden-import uvicorn.protocols.websockets.auto `
             --hidden-import uvicorn.lifespan.on `
             --hidden-import uvicorn.lifespan.off `
+            --hidden-import faster_whisper `
+            --hidden-import stable_whisper `
             --collect-all lyrics `
             --collect-all postprocess `
+            --collect-all faster_whisper `
+            --collect-all stable_whisper `
+            --collect-all ctranslate2 `
             --add-data "config.yaml;." `
             api_server.py
           if (!(Test-Path "dist\api_server.exe")) {
