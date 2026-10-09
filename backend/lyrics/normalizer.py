@@ -205,6 +205,15 @@ def generate_search_variations(artist: str | None, title: str) -> list[dict[str,
 
         # 4. Título primero
         add_var(primary, clean_t, f"{clean_t} {primary}".strip())
+
+        # 5. Si el título repite el nombre del artista (ej: ""), probar título limpio
+        for a in artists:
+            for w in [word for word in re.split(r"\s+", a) if len(word) >= 4]:
+                pattern = re.compile(rf"\s*[-_–/|]\s*{re.escape(w)}.*$", re.IGNORECASE)
+                stripped_t = pattern.sub("", clean_t).strip()
+                if stripped_t and len(stripped_t) >= 2 and stripped_t != clean_t:
+                    add_var(primary, stripped_t, f"{primary} {stripped_t}".strip())
+                    add_var("", stripped_t, stripped_t)
     else:
         add_var("", clean_t, clean_t)
 

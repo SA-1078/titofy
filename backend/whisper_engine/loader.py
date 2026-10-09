@@ -100,10 +100,34 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
     if use_faster:
-        hf_cache = os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+        cache_dirs = []
+        try:
+            from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+            cache_dirs.append(HUGGINGFACE_HUB_CACHE)
+        except Exception:
+            pass
+        cache_dirs.append(os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub"))
+        if os.name == "nt":
+            local_appdata = os.environ.get("LOCALAPPDATA")
+            if local_appdata:
+                cache_dirs.append(os.path.join(local_appdata, "huggingface", "hub"))
         fw_folder = f"models--Systran--faster-whisper-{fw_name}"
-        if os.path.exists(os.path.join(hf_cache, fw_folder)):
-            return True
+        for cdir in cache_dirs:
+            target = os.path.join(cdir, fw_folder)
+            if os.path.exists(target):
+                snapshots_dir = os.path.join(target, "snapshots")
+                if os.path.exists(snapshots_dir):
+                    try:
+                        snaps = os.listdir(snapshots_dir)
+                        if snaps and any(os.listdir(os.path.join(snapshots_dir, s)) for s in snaps):
+                            return True
+                    except Exception:
+                        pass
+                try:
+                    if any(f.endswith((".bin", ".safetensors")) for f in os.listdir(target)):
+                        return True
+                except Exception:
+                    pass
 
     import importlib
     download_root = os.getenv(
@@ -142,39 +166,36 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     model_name_fw = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
     model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
-    # 1. Intentar faster-whisper en el dispositivo seleccionado
+    # Limitar hilos de CPU para no congelar la máquina del usuario
+    cpu_limit = str(min(4, max(1, (os.cpu_count() or 4) // 2)))
+    os.environ.setdefault("OMP_NUM_THREADS", cpu_limit)
+    os.environ.setdefault("MKL_NUM_THREADS", cpu_limit)
+    os.environ.setdefault("OPENBLAS_NUM_THREADS", cpu_limit)
+    os.environ.setdefault("NUMEXPR_NUM_THREADS", cpu_limit)
+    os.environ.setdefault("CT2_NUM_THREADS", cpu_limit)
+
+    # 1. Intentar faster-whisper nativo en el dispositivo seleccionado
     if compute_type == "auto":
         selected_compute = "float16" if device == "cuda" else "int8"
     else:
         selected_compute = compute_type
 
-    try:
-        try:
-            import stable_whisper
-            log.info(f"Cargando faster-whisper via stable-ts ({model_name_fw}) en {device} ({selected_compute})...")
-            model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
-            return model, True
-        except ImportError:
-            from faster_whisper import WhisperModel
-            log.info(f"Cargando faster-whisper nativo ({model_name_fw}) en {device} ({selected_compute})...")
-            model = WhisperModel(model_name_fw, device=device, compute_type=selected_compute)
-            return model, True
+    num_threads = int(os.environ.get("CT2_NUM_THREADS", "4"))
 
+    try:
+        from faster_whisper import WhisperModel
+        log.info(f"Cargando faster-whisper ({model_name_fw}) en {device} ({selected_compute}, {num_threads} hilos)...")
+        model = WhisperModel(model_name_fw, device=device, compute_type=selected_compute, cpu_threads=num_threads)
+        return model, True
     except Exception as e:
         log.warning(f"Fallo faster-whisper en {device}: {e}")
         # Si falló en CUDA, reintentar faster-whisper en CPU
         if device == "cuda":
             try:
-                try:
-                    import stable_whisper
-                    log.info(f"Reintentando faster-whisper ({model_name_fw}) en CPU (int8)...")
-                    model = stable_whisper.load_faster_whisper(model_name_fw, device="cpu", compute_type="int8")
-                    return model, True
-                except ImportError:
-                    from faster_whisper import WhisperModel
-                    log.info(f"Reintentando faster-whisper nativo ({model_name_fw}) en CPU (int8)...")
-                    model = WhisperModel(model_name_fw, device="cpu", compute_type="int8")
-                    return model, True
+                from faster_whisper import WhisperModel
+                log.info(f"Reintentando faster-whisper ({model_name_fw}) en CPU (int8)...")
+                model = WhisperModel(model_name_fw, device="cpu", compute_type="int8", cpu_threads=num_threads)
+                return model, True
             except Exception as e_cpu:
                 log.warning(f"Fallo faster-whisper en CPU: {e_cpu}")
 

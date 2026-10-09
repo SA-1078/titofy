@@ -51,8 +51,14 @@ from datetime import datetime
 
 # Evitar que una escritura sobre un pipe/socket cerrado
 # termine todo el proceso mediante SIGPIPE.
-if hasattr(signal, "SIGPIPE"):
-    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+# Limitar hilos de CPU para que Whisper / CTranslate2 no saturen la CPU
+max_threads = str(min(4, max(1, (os.cpu_count() or 4) // 2)))
+os.environ.setdefault("OMP_NUM_THREADS", max_threads)
+os.environ.setdefault("MKL_NUM_THREADS", max_threads)
+os.environ.setdefault("OPENBLAS_NUM_THREADS", max_threads)
+os.environ.setdefault("VECLIB_MAXIMUM_THREADS", max_threads)
+os.environ.setdefault("NUMEXPR_NUM_THREADS", max_threads)
+os.environ.setdefault("CT2_NUM_THREADS", max_threads)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -89,7 +95,39 @@ app.add_middleware(
 
 tasks = {}          # {task_id: TaskState}
 model_cache = {}    # {model_name: loaded_model}
+_model_download_status = {}  # {model_name: {"status": str, "error": Optional[str]}}
 _lock = threading.Lock()
+
+
+def start_parent_watchdog(parent_pid: int):
+    """Monitorea el proceso padre de Titofy. Si se cierra o desinstala, termina api_server inmediatamente."""
+    if parent_pid <= 0:
+        return
+
+    def _watch():
+        import ctypes
+        while True:
+            time.sleep(1.5)
+            try:
+                if os.name == "nt":
+                    SYNCHRONIZE = 0x00100000
+                    h = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, parent_pid)
+                    if not h:
+                        log.info(f"Proceso padre {parent_pid} ya no existe. Finalizando api_server...")
+                        os._exit(0)
+                    res = ctypes.windll.kernel32.WaitForSingleObject(h, 0)
+                    ctypes.windll.kernel32.CloseHandle(h)
+                    if res != 0x00000102:  # 258 = WAIT_TIMEOUT
+                        log.info(f"Proceso padre {parent_pid} finalizó. Finalizando api_server...")
+                        os._exit(0)
+                else:
+                    os.kill(parent_pid, 0)
+            except Exception:
+                log.info(f"Proceso padre {parent_pid} terminó. Finalizando api_server...")
+                os._exit(0)
+
+    t = threading.Thread(target=_watch, daemon=True)
+    t.start()
 
 
 class TaskState:
@@ -161,17 +199,28 @@ class PreloadModelRequest(BaseModel):
 # ──────────────────────────────────────────────────────────────────────────────
 
 def _get_model(model_name: str):
-    """Carga un modelo con cache."""
-    if model_name not in model_cache:
-        from whisper_transcribe import detect_device, load_whisper_model
+    """Carga un modelo con cache manteniendo como máximo 1 modelo en memoria RAM."""
+    global model_cache
+    with _lock:
+        if model_name in model_cache:
+            return model_cache[model_name]
+
+        # Liberar modelo previo para evitar acumular 20 GB de memoria RAM
+        if model_cache:
+            log.info("Liberando modelo previo en memoria RAM...")
+            model_cache.clear()
+            import gc
+            gc.collect()
+
+        from whisper_engine.loader import load_whisper_model, detect_device
         device, device_name = detect_device()
         wcfg = cfg.get("whisper", {})
         compute_type = wcfg.get("compute_type", "auto")
-        
-        log.info(f"Cargando modelo '{model_name}' en {device} (primera vez, se cacheará)...")
+
+        log.info(f"Cargando modelo '{model_name}' en {device} (1 modelo activo en RAM)...")
         model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
         model_cache[model_name] = model
-    return model_cache[model_name]
+        return model
 
 
 def _run_transcription(task: TaskState, req: TranscribeRequest):
@@ -416,14 +465,44 @@ async def list_models():
         return {"models": [], "error": str(e)}
 
 
+def _download_worker(model_name: str):
+    try:
+        _model_download_status[model_name] = {"status": "downloading", "error": None}
+        _get_model(model_name)
+        _model_download_status[model_name] = {"status": "ready", "error": None}
+        log.info(f"Modelo '{model_name}' descargado y verificado en caché.")
+    except Exception as e:
+        log.error(f"Error descargando modelo '{model_name}': {e}")
+        _model_download_status[model_name] = {"status": "error", "error": str(e)}
+
+
 @app.post("/models/preload")
 async def preload_model(req: Optional[PreloadModelRequest] = None):
-    """Descarga/precarga en caché un modelo Whisper por adelantado."""
+    """Descarga/precarga en caché un modelo Whisper por adelantado sin bloquear."""
     model_name = (req.model if req and req.model else "small")
-    import asyncio
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _get_model, model_name)
-    return {"status": "ok", "model": model_name, "downloaded": True}
+    from whisper_engine.loader import is_model_downloaded
+    if is_model_downloaded(model_name) and model_name in model_cache:
+        _model_download_status[model_name] = {"status": "ready", "error": None}
+        return {"status": "ready", "model": model_name, "downloaded": True}
+
+    current = _model_download_status.get(model_name, {})
+    if current.get("status") == "downloading":
+        return {"status": "downloading", "model": model_name, "downloaded": False}
+
+    _model_download_status[model_name] = {"status": "downloading", "error": None}
+    thread = threading.Thread(target=_download_worker, args=(model_name,), daemon=True)
+    thread.start()
+    return {"status": "downloading", "model": model_name, "downloaded": False}
+
+
+@app.get("/models/status/{model_name}")
+async def get_model_status(model_name: str):
+    """Consulta el estado de descarga de un modelo."""
+    from whisper_engine.loader import is_model_downloaded
+    if is_model_downloaded(model_name):
+        return {"model": model_name, "status": "ready", "error": None}
+    status = _model_download_status.get(model_name, {"status": "not_downloaded", "error": None})
+    return {"model": model_name, **status}
 
 
 @app.get("/config")
@@ -492,22 +571,17 @@ if __name__ == "__main__":
     import multiprocessing
     multiprocessing.freeze_support()
 
-    import uvicorn
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--parent-pid", type=int, default=0, help="PID del proceso padre")
+    parsed_args, _ = parser.parse_known_args()
+    if parsed_args.parent_pid > 0:
+        log.info(f"Iniciando watchdog para proceso padre PID {parsed_args.parent_pid}")
+        start_parent_watchdog(parsed_args.parent_pid)
 
+    import uvicorn
     host = cfg["api"]["host"]
     port = cfg["api"]["port"]
-
-    # Liberar puerto huerfano si estaba ocupado
     _free_port_if_in_use(port)
-
-    print()
-    print("  --------------------------------------------------")
-    print("    Titofy API - Servidor Local")
-    print("  --------------------------------------------------")
-    print(f"   URL: http://{host}:{port}")
-    print(f"   Docs: http://{host}:{port}/docs")
-    print()
-
-    log.info(f"API server iniciando en {host}:{port}")
-
+    log.info(f"Titofy API iniciando en http://{host}:{port}")
     uvicorn.run(app, host=host, port=port, reload=False, workers=1, log_level="warning")
