@@ -36,6 +36,12 @@ from whisper_engine.formatter import to_lrc_timestamp, clean_text, split_long_se
 
 log = get_logger("whisper.transcribe")
 
+def _safe_print(*args: typing.Any, **kwargs: typing.Any) -> None:
+    try:
+        print(*args, **kwargs)
+    except (BrokenPipeError, OSError):
+        pass
+
 try:
     from music_detector import classify_sections
     HAS_MUSIC_DETECTOR = True
@@ -93,11 +99,11 @@ def transcribe_audio(
     inner_width = min(max(term_width - 6, 60), 140)
 
     if verbose:
-        print()
-        print("  ╭" + "─" * (inner_width - 2) + "╮")
-        print("  │  🎵 TITOFY — TRANSCRIBIR AUDIO A LRC DE LETRAS".ljust(inner_width, ' ') + "│")
-        print("  ╰" + "─" * (inner_width - 2) + "╯")
-        print()
+        _safe_print()
+        _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+        _safe_print("  │  🎵 TITOFY — TRANSCRIBIR AUDIO A LRC DE LETRAS".ljust(inner_width, ' ') + "│")
+        _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+        _safe_print()
 
     duration = validate_audio_file(audio_path)
     lang_display = "auto (detectar)" if language == "auto" else language
@@ -107,10 +113,10 @@ def transcribe_audio(
 
     if verbose:
         sep = "  │  " + "─" * (inner_width - 7) + "  │"
-        print("  ╭" + "─" * (inner_width - 2) + "╮")
+        _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
         def _row(key, val):
             line = f"  │  {key:<12}: {val}"
-            print(line.ljust(inner_width + 2) + "│")
+            _safe_print(line.ljust(inner_width + 2) + "│")
         _row("Modelo", model_display)
         _row("Archivo", basename)
         if duration:
@@ -124,8 +130,8 @@ def transcribe_audio(
             _row("Precisión", "FP16 · aceleración GPU")
         else:
             _row("Hardware", "CPU (int8) — sin GPU CUDA")
-        print("  ╰" + "─" * (inner_width - 2) + "╯")
-        print()
+        _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+        _safe_print()
 
     log.info(f"Iniciando transcripción: {basename} [modelo={model_name}, lang={lang_display}, device={device}]")
 
@@ -143,7 +149,7 @@ def transcribe_audio(
         pass
 
     if verbose:
-        print(f"  ⏳ Cargando modelo '{model_name}' en {device.upper()}...")
+        _safe_print(f"  ⏳ Cargando modelo '{model_name}' en {(device or 'cpu').upper()}...")
 
     try:
         model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
@@ -182,8 +188,11 @@ def transcribe_audio(
         rem_s = rem_sec % 60
         time_str = f"{rem_m}:{rem_s:02d} restantes"
 
-        real_stdout.write(f"\r→ Transcribiendo  {bar}  {pct}%  ·  {time_str}   ")
-        real_stdout.flush()
+        try:
+            real_stdout.write(f"\r→ Transcribiendo  {bar}  {pct}%  ·  {time_str}   ")
+            real_stdout.flush()
+        except (BrokenPipeError, OSError):
+            pass
 
     default_lang = wcfg.get("default_language", "es")
     selected_lang = default_lang if language == "auto" else language
@@ -218,7 +227,7 @@ def transcribe_audio(
 
     orig_tqdm: typing.Any = None
     try:
-        import tqdm as _tqdm_mod
+        import tqdm as _tqdm_mod  # type: ignore
         orig_tqdm = getattr(_tqdm_mod, "tqdm", None)
         if orig_tqdm is not None:
             setattr(_tqdm_mod, "tqdm", lambda *a, **k: orig_tqdm(*a, **{**k, "disable": True}))
@@ -237,17 +246,22 @@ def transcribe_audio(
             result = model_obj.transcribe(audio_path, **transcribe_kwargs)
     except Exception as e:
         sys.stdout = real_stdout
-        real_stdout.write("\n")
+        try:
+            real_stdout.write("\n")
+        except (BrokenPipeError, OSError):
+            pass
         log.error(f"Fallo en la transcripción: {e}")
-        print(f"\n  ❌ Error durante la transcripción: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"Error durante la transcripción: {e}")
     finally:
         sys.stdout = real_stdout
-        real_stdout.write("\r" + " " * 80 + "\r")
-        real_stdout.flush()
+        try:
+            real_stdout.write("\r" + " " * 80 + "\r")
+            real_stdout.flush()
+        except (BrokenPipeError, OSError):
+            pass
         # Restaurar tqdm original
         try:
-            import tqdm as _tqdm_mod
+            import tqdm as _tqdm_mod  # type: ignore
             if orig_tqdm is not None:
                 setattr(_tqdm_mod, "tqdm", orig_tqdm)
         except Exception:
@@ -259,10 +273,18 @@ def transcribe_audio(
     result_dict = result_obj.to_dict() if hasattr(result_obj, "to_dict") else dict(result_obj)
     detected_lang = result_dict.get("language", language)
     segments = result_dict.get("segments", [])
+    title = os.path.splitext(basename)[0]
 
     if not segments:
-        print_yellow("\n  ⚠️  Whisper no detectó voz en este audio.")
-        sys.exit(1)
+        log.info(f"Whisper no detectó voz en '{basename}'. Marcando pista como instrumental.")
+        lrc_lines = [
+            f"[ti:{title}]",
+            f"[by:Titofy — Whisper {model_name} | Instrumental]",
+            "[00:00.00] (instrumental)",
+        ]
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lrc_lines) + "\n")
+        return {"segments": [], "text": "(instrumental)", "language": detected_lang, "is_instrumental": True}
 
     quality = estimate_transcription_quality(segments, duration)
 
@@ -274,7 +296,6 @@ def transcribe_audio(
         total_dur = duration or (segments[-1]["end"] if segments else 180.0)
         segments = classify_sections(segments, total_dur)
 
-    title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
         f"[by:Titofy — Whisper {model_name} | lang:{detected_lang}]",
@@ -316,21 +337,21 @@ def transcribe_audio(
         score_str = f"\033[31m{score_val}%\033[0m"
 
     if verbose:
-        print()
+        _safe_print()
         def _res(key, val):
             line = f"  │  {key:<24}: {val}"
-            print(line.ljust(inner_width + 2) + "│")
-        print("  ╭" + "─" * (inner_width - 2) + "╮")
-        print("  │  Resultado".ljust(inner_width + 2) + "│")
-        print("  │  " + "─" * (inner_width - 7) + "  │")
+            _safe_print(line.ljust(inner_width + 2) + "│")
+        _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+        _safe_print("  │  Resultado".ljust(inner_width + 2) + "│")
+        _safe_print("  │  " + "─" * (inner_width - 7) + "  │")
         _res("Líneas sincronizadas", str(lyric_count))
         _res("Nivel de confianza", score_str)
         if quality['low_confidence_segments'] > 0:
             _res("Segmentos baja confianza", f"{quality['low_confidence_segments']} ({quality['low_confidence_pct']}%)")
-        print("  │".ljust(inner_width + 2) + "│")
+        _safe_print("  │".ljust(inner_width + 2) + "│")
         _res("Guardado en", f"lrc/{lrc_name}")
-        print("  ╰" + "─" * (inner_width - 2) + "╯")
-        print()
+        _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+        _safe_print()
 
 
 

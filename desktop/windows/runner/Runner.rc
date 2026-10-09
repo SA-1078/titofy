@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.titofy" "\0"
-            VALUE "FileDescription", "desktop" "\0"
+            VALUE "CompanyName", "Titofy Team" "\0"
+            VALUE "FileDescription", "Titofy Desktop" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "desktop" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.titofy. All rights reserved." "\0"
-            VALUE "OriginalFilename", "desktop.exe" "\0"
-            VALUE "ProductName", "desktop" "\0"
+            VALUE "InternalName", "titofy" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 Titofy. All rights reserved." "\0"
+            VALUE "OriginalFilename", "titofy.exe" "\0"
+            VALUE "ProductName", "Titofy" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

@@ -122,11 +122,11 @@ async function resolveHybridLyrics(audioPath, options = {}) {
     try {
       const res = await api.resolveLyrics(artist, title, {
         audioPath,
-        mode: "online_only",
+        mode: "auto",
         language: "auto",
         outputPath: lrcPath,
         force: true,
-        timeout: 10000,
+        timeout: 60000,
       });
 
       if (res && res.lines && res.lines.length > 0 && fs.existsSync(lrcPath)) {

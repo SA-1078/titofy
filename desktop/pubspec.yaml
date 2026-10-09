@@ -1,8 +1,8 @@
 name: titofy
-description: "Titofy 2.0 — Reproductor multimedia con IA local para transcripción y karaoke sincronizado."
+description: "Titofy 1.0 — Reproductor multimedia con IA local para transcripción y karaoke sincronizado."
 publish_to: 'none'
 
-version: 2.0.0+1
+version: 1.0.0+1
 
 environment:
   sdk: ^3.12.2
@@ -11,10 +11,10 @@ dependencies:
   flutter:
     sdk: flutter
 
-  # ── Reproductor multimedia (audio + video con libmpv) ──────────────────────
+  # ── Reproductor multimedia (audio con libmpv) ──────────────────────
   media_kit: ^1.1.11
-  media_kit_video: ^1.2.5
   media_kit_libs_linux: ^1.0.7          # libs nativas Linux (libmpv)
+  media_kit_libs_windows_audio: ^1.0.7  # libs nativas Windows (libmpv audio)
 
   # ── Selector de archivos y carpetas ────────────────────────────────────────
   file_picker: ^10.1.9
@@ -23,8 +23,9 @@ dependencies:
   http: ^1.4.0
 
   # ── Base de datos local (biblioteca de música/video) ──────────────────────
-  drift: ^2.26.1
+  sqlite3: ^2.4.6
   sqlite3_flutter_libs: ^0.5.30
+  drift: ^2.26.1
 
   # ── Config y rutas ────────────────────────────────────────────────────────
   yaml: ^3.1.3
@@ -59,3 +60,6 @@ flutter:
   # ── Assets ────────────────────────────────────────────────────────────────
   assets:
     - assets/images/
+
+dependency_overrides:
+  flutter_rust_bridge: 2.11.1

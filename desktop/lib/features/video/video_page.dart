@@ -6,17 +6,18 @@ class VideoPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final c = context.colors;
     return Container(
-      color: AppColors.background,
-      child: const Center(
+      color: c.background,
+      child: Center(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.movie_rounded, size: 48, color: AppColors.textMuted),
-            SizedBox(height: 12),
-            Text('Mis Videos', style: TextStyle(color: AppColors.textMuted)),
-            SizedBox(height: 4),
-            Text('Próximamente', style: TextStyle(color: AppColors.textDisabled, fontSize: 12)),
+            Icon(Icons.movie_rounded, size: 48, color: c.textMuted),
+            const SizedBox(height: 12),
+            Text('Mis Videos', style: TextStyle(color: c.textPrimary, fontWeight: FontWeight.bold, fontSize: 16)),
+            const SizedBox(height: 4),
+            Text('Próximamente', style: TextStyle(color: c.textMuted, fontSize: 12)),
           ],
         ),
       ),

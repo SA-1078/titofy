@@ -1,537 +1,927 @@
-import 'dart:typed_data';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../core/theme/colors.dart';
 import '../../core/services/library_service.dart';
 import '../../core/services/player_service.dart';
+import '../../core/services/api_service.dart';
+import '../../core/services/lyrics_service.dart';
+import '../../core/services/locale_service.dart';
+import 'hybrid_lyrics_dialog.dart';
+import 'add_to_playlist_dialog.dart';
+import '../../shell/window_controls.dart';
 
-class MusicPage extends StatelessWidget {
+/// Pantalla Principal / Explorador (Fiel al Diseño UI_titofy_3, adaptable a Tema Claro / Oscuro)
+class MusicPage extends StatefulWidget {
   const MusicPage({super.key});
+
+  @override
+  State<MusicPage> createState() => _MusicPageState();
+}
+
+class _MusicPageState extends State<MusicPage> {
+  String _searchQuery = '';
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  List<List<Color>> _getCoverGradients(ThemeColors c) => [
+    [c.primary, c.accentPreset.dark],
+    [c.accentPreset.light, c.primary],
+    [const Color(0xFF1B1A55), const Color(0xFF535C91)],
+    [const Color(0xFF005B41), const Color(0xFF008170)],
+    [const Color(0xFF4A148C), const Color(0xFF880E4F)],
+    [const Color(0xFF222831), const Color(0xFF393E46)],
+  ];
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     final library = context.watch<LibraryService>();
+    final player = context.watch<PlayerService>();
+    final api = context.watch<ApiService>();
+    final loc = context.watch<LocaleService>();
+    final c = context.colors;
+
+    final displayTracks = library.tracks.where((t) {
+      if (_searchQuery.isEmpty) return true;
+      final q = _searchQuery.toLowerCase();
+      return t.title.toLowerCase().contains(q) ||
+          t.artist.toLowerCase().contains(q) ||
+          t.album.toLowerCase().contains(q);
+    }).toList();
+
+    // Agrupar pistas por Álbum
+    final Map<String, List<Track>> albumGroups = {};
+    for (final t in library.tracks) {
+      final key = (t.album.isNotEmpty && t.album != 'Álbum local') ? t.album : t.artist;
+      albumGroups.putIfAbsent(key, () => []).add(t);
+    }
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      body: library.tracks.isEmpty
-          ? _EmptyState(isScanning: library.isScanning)
-          : _LibraryView(tracks: library.tracks, isScanning: library.isScanning),
-    );
-  }
-}
-
-// ── ESTADO VACÍO ──────────────────────────────────────────────────────────────
-
-class _EmptyState extends StatelessWidget {
-  final bool isScanning;
-  const _EmptyState({required this.isScanning});
-
-  @override
-  Widget build(BuildContext context) {
-    return Center(
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
+      body: Column(
         children: [
-          if (isScanning) ...[
-            const SizedBox(
-              width: 48,
-              height: 48,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: AppColors.primaryLight,
+          // ── Barra Superior: Navegación, Buscador, Estado IA ──────────────
+          _buildTopBar(context, library, api, loc, c),
+
+          // ── Contenido con Scroll ─────────────────────────────────────────
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 8),
+              physics: const BouncingScrollPhysics(),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // ── SECCIÓN 1: Álbumes / Destacados ───────────────────────
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        loc.t('newAlbums'),
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                          color: c.textPrimary,
+                          letterSpacing: -0.4,
+                        ),
+                      ),
+                      if (library.tracks.isNotEmpty)
+                        Text(
+                          '${albumGroups.length} ${loc.t('albums').toLowerCase()}',
+                          style: TextStyle(
+                            color: c.textMuted,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w600,
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+
+                  if (library.tracks.isEmpty)
+                    _buildEmptyLibraryPrompt(context, library, loc, c)
+                  else
+                    SizedBox(
+                      height: 195,
+                      child: ListView.separated(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        itemCount: albumGroups.length,
+                        separatorBuilder: (context, index) => const SizedBox(width: 18),
+                        itemBuilder: (context, index) {
+                          final albumName = albumGroups.keys.elementAt(index);
+                          final tracks = albumGroups[albumName]!;
+                          final isFeatured = index == 0;
+                          final albumGradients = _getCoverGradients(c);
+                          return _buildRealAlbumCard(
+                            albumName: albumName,
+                            tracks: tracks,
+                            isFeatured: isFeatured,
+                            gradientIndex: index % albumGradients.length,
+                            player: player,
+                            c: c,
+                          );
+                        },
+                      ),
+                    ),
+
+                  const SizedBox(height: 28),
+
+                  // ── SECCIÓN 2: Split Columns (Top Charts & Colección) ─────
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // COLUMNA IZQUIERDA: Pistas y Canciones
+                      Expanded(
+                        flex: 6,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                              children: [
+                                Text(
+                                  loc.t('topCharts'),
+                                  style: TextStyle(
+                                    fontSize: 19,
+                                    fontWeight: FontWeight.w800,
+                                    color: c.textPrimary,
+                                    letterSpacing: -0.4,
+                                  ),
+                                ),
+                                Row(
+                                  children: [
+                                    if (displayTracks.isNotEmpty)
+                                      Text(
+                                        '${displayTracks.length} canciones',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: c.textMuted,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                    const SizedBox(width: 6),
+                                    IconButton(
+                                      tooltip: 'Recargar biblioteca',
+                                      icon: library.isScanning
+                                          ? SizedBox(
+                                              width: 14,
+                                              height: 14,
+                                              child: CircularProgressIndicator(strokeWidth: 2, color: c.primary),
+                                            )
+                                          : Icon(Icons.sync_rounded, size: 16, color: c.textMuted),
+                                      splashRadius: 16,
+                                      onPressed: library.isScanning || library.scannedFolder == null
+                                          ? null
+                                          : () => library.scanFolder(library.scannedFolder!),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 14),
+                            if (displayTracks.isEmpty)
+                              Container(
+                                padding: const EdgeInsets.all(24),
+                                decoration: BoxDecoration(
+                                  color: c.surface,
+                                  borderRadius: BorderRadius.circular(16),
+                                  border: Border.all(color: c.glassBorder),
+                                  boxShadow: [
+                                    if (!c.isDark)
+                                      BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4)),
+                                  ],
+                                ),
+                                child: Center(
+                                  child: Text(
+                                    library.tracks.isEmpty
+                                        ? loc.t('noMusicFound')
+                                        : 'No se encontraron resultados para "$_searchQuery"',
+                                    style: TextStyle(fontSize: 13, color: c.textSecondary),
+                                  ),
+                                ),
+                              )
+                            else
+                              ListView.builder(
+                                shrinkWrap: true,
+                                physics: const NeverScrollableScrollPhysics(),
+                                itemCount: displayTracks.take(15).length,
+                                itemBuilder: (context, index) {
+                                  final track = displayTracks[index];
+                                  final isSelected = player.currentTrack?.path == track.path;
+                                  return _buildTrackItem(context, track, isSelected, player, library, c);
+                                },
+                              ),
+                          ],
+                        ),
+                      ),
+
+                      const SizedBox(width: 28),
+
+                      // COLUMNA DERECHA: Resumen de Biblioteca y Modo Híbrido IA
+                      Expanded(
+                        flex: 5,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              loc.t('playlists'),
+                              style: TextStyle(
+                                fontSize: 19,
+                                fontWeight: FontWeight.w800,
+                                color: c.textPrimary,
+                                letterSpacing: -0.4,
+                              ),
+                            ),
+                            const SizedBox(height: 14),
+                            _buildInfoPanelCard(context, library, api, loc, c),
+                            const SizedBox(height: 14),
+                            _buildQuickFilterCards(library, player, c),
+                          ],
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 24),
+                ],
               ),
             ),
-            const SizedBox(height: 24),
-            const Text(
-              'Escaneando biblioteca...',
-              style: TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-            const SizedBox(height: 6),
-            const Text(
-              'Leyendo metadatos de tus archivos de audio',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 12),
-            ),
-          ] else ...[
-            Container(
-              width: 80,
-              height: 80,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                gradient: LinearGradient(
-                  colors: [AppColors.primary.withOpacity(0.2), AppColors.secondary.withOpacity(0.2)],
-                ),
-                border: Border.all(color: AppColors.primary.withOpacity(0.3)),
-              ),
-              child: const Icon(
-                Icons.folder_open_rounded,
-                color: AppColors.primaryLight,
-                size: 32,
-              ),
-            ),
-            const SizedBox(height: 24),
-            const Text(
-              'Sin música en tu biblioteca',
-              style: TextStyle(
-                color: AppColors.textPrimary,
-                fontSize: 18,
-                fontWeight: FontWeight.bold,
-                letterSpacing: -0.5,
-              ),
-            ),
-            const SizedBox(height: 8),
-            const Text(
-              'Escanea una carpeta para empezar a reproducir',
-              style: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-            ),
-            const SizedBox(height: 28),
-            _ScanButton(),
-          ],
+          ),
         ],
       ),
     );
   }
-}
 
-// ── VISTA DE BIBLIOTECA CON TRACKS ───────────────────────────────────────────
-
-class _LibraryView extends StatefulWidget {
-  final List<Track> tracks;
-  final bool isScanning;
-
-  const _LibraryView({required this.tracks, required this.isScanning});
-
-  @override
-  State<_LibraryView> createState() => _LibraryViewState();
-}
-
-class _LibraryViewState extends State<_LibraryView> {
-  String _query = '';
-
-  List<Track> get _filtered {
-    if (_query.isEmpty) return widget.tracks;
-    final q = _query.toLowerCase();
-    return widget.tracks.where((t) =>
-        t.title.toLowerCase().contains(q) ||
-        t.artist.toLowerCase().contains(q) ||
-        t.album.toLowerCase().contains(q)).toList();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final filtered = _filtered;
-
-    return CustomScrollView(
-      physics: const BouncingScrollPhysics(),
-      slivers: [
-        // ── Cabecera ─────────────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 24, 24, 16),
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.center,
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Mi Música',
-                      style: Theme.of(context).textTheme.headlineMedium?.copyWith(
-                            fontSize: 26,
-                            fontWeight: FontWeight.w900,
-                            letterSpacing: -0.5,
-                          ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      '${widget.tracks.length} canciones',
-                      style: const TextStyle(color: AppColors.textSecondary, fontSize: 12),
-                    ),
-                  ],
-                ),
-                const Spacer(),
-                if (widget.isScanning)
-                  const Padding(
-                    padding: EdgeInsets.only(right: 12),
-                    child: SizedBox(
-                      width: 16,
-                      height: 16,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        color: AppColors.secondary,
-                      ),
-                    ),
-                  ),
-                _ScanButton(),
-              ],
+  // ── Tarjeta de Estado Vacío de Biblioteca ─────────────────────────────────
+  Widget _buildEmptyLibraryPrompt(BuildContext context, LibraryService library, LocaleService loc, ThemeColors c) {
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 26),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(20),
+        border: Border.all(color: c.glassBorder),
+        boxShadow: [
+          if (!c.isDark)
+            BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 12, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              shape: BoxShape.circle,
+              color: c.primary.withOpacity(0.12),
             ),
+            child: Icon(Icons.music_off_rounded, color: c.primary, size: 36),
           ),
-        ),
-
-        // ── Buscador ──────────────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
-            child: Container(
-              height: 42,
-              decoration: BoxDecoration(
-                color: AppColors.glassBg.withOpacity(0.04),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.glassBorder.withOpacity(0.5)),
-              ),
-              child: TextField(
-                onChanged: (v) => setState(() => _query = v),
-                decoration: const InputDecoration(
-                  hintText: '¿Qué quieres escuchar?',
-                  hintStyle: TextStyle(color: AppColors.textSecondary, fontSize: 13),
-                  prefixIcon: Icon(Icons.search_rounded, color: AppColors.textSecondary, size: 18),
-                  border: InputBorder.none,
-                  contentPadding: EdgeInsets.symmetric(vertical: 12),
-                ),
-                style: const TextStyle(color: AppColors.textPrimary, fontSize: 13),
-              ),
-            ),
-          ),
-        ),
-
-        // ── Cabecera de tabla ─────────────────────────────────────────────────
-        SliverToBoxAdapter(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(24, 20, 24, 8),
-            child: Row(
+          const SizedBox(width: 20),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const SizedBox(width: 32),
-                Expanded(
-                  flex: 4,
-                  child: Text(
-                    'TÍTULO',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textMuted,
-                          letterSpacing: 1.5,
-                        ),
-                  ),
-                ),
-                Expanded(
-                  flex: 3,
-                  child: Text(
-                    'ÁLBUM',
-                    style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                          fontSize: 9,
-                          fontWeight: FontWeight.bold,
-                          color: AppColors.textMuted,
-                          letterSpacing: 1.5,
-                        ),
-                  ),
-                ),
                 Text(
-                  'DURACIÓN',
-                  style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                        fontSize: 9,
-                        fontWeight: FontWeight.bold,
-                        color: AppColors.textMuted,
-                        letterSpacing: 1.5,
-                      ),
+                  loc.t('noMusicFound'),
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.bold,
+                    color: c.textPrimary,
+                  ),
                 ),
-                const SizedBox(width: 40),
+                const SizedBox(height: 4),
+                Text(
+                  'Elige la carpeta donde tienes tus archivos MP3, FLAC o WAV para comenzar a reproducir y sincronizar letras.',
+                  style: TextStyle(fontSize: 12, color: c.textSecondary),
+                ),
               ],
             ),
           ),
-        ),
-
-        // ── Lista de tracks ────────────────────────────────────────────────────
-        SliverPadding(
-          padding: const EdgeInsets.fromLTRB(24, 0, 24, 24),
-          sliver: SliverList(
-            delegate: SliverChildBuilderDelegate(
-              (context, index) {
-                final track = filtered[index];
-                return _TrackRow(track: track, index: index + 1);
-              },
-              childCount: filtered.length,
+          const SizedBox(width: 16),
+          ElevatedButton.icon(
+            icon: const Icon(Icons.folder_open_rounded, size: 18),
+            label: Text(loc.t('changeFolder')),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: c.primary,
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              elevation: 4,
             ),
+            onPressed: () => library.pickAndScan(),
           ),
-        ),
-      ],
+        ],
+      ),
     );
   }
-}
 
-// ── BOTÓN ESCANEAR ─────────────────────────────────────────────────────────────
+  // ── Barra Superior (Limpia: sin icono duplicado de carpeta) ───────────────
+  Widget _buildTopBar(BuildContext context, LibraryService library, ApiService api, LocaleService loc, ThemeColors c) {
+    return Container(
+      height: 64,
+      padding: const EdgeInsets.symmetric(horizontal: 28),
+      child: Row(
+        children: [
+          // Flechas decorativas de navegación
+          Row(
+            children: [
+              IconButton(
+                icon: Icon(Icons.arrow_back_ios_rounded, size: 15, color: c.textSecondary),
+                constraints: const BoxConstraints(),
+                padding: const EdgeInsets.all(8),
+                splashRadius: 18,
+                onPressed: () {},
+              ),
+              const SizedBox(width: 4),
+              IconButton(
+                icon: Icon(Icons.arrow_forward_ios_rounded, size: 15, color: c.textMuted),
+                constraints: const BoxConstraints(),
+                padding: const EdgeInsets.all(8),
+                splashRadius: 18,
+                onPressed: () {},
+              ),
+            ],
+          ),
 
-class _ScanButton extends StatefulWidget {
-  @override
-  State<_ScanButton> createState() => _ScanButtonState();
-}
+          const SizedBox(width: 24),
 
-class _ScanButtonState extends State<_ScanButton> {
-  bool _hover = false;
+          // Buscador central redondeado
+          Expanded(
+            child: Container(
+              height: 40,
+              decoration: BoxDecoration(
+                color: c.surface,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(color: c.glassBorder),
+                boxShadow: [
+                  if (!c.isDark)
+                    BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 8, offset: const Offset(0, 2)),
+                ],
+              ),
+              padding: const EdgeInsets.symmetric(horizontal: 14),
+              child: Row(
+                children: [
+                  Icon(Icons.search_rounded, size: 18, color: c.textSecondary),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: TextField(
+                      controller: _searchCtrl,
+                      onChanged: (v) => setState(() => _searchQuery = v),
+                      style: TextStyle(fontSize: 13, color: c.textPrimary),
+                      decoration: InputDecoration(
+                        hintText: loc.t('searchHint'),
+                        hintStyle: TextStyle(fontSize: 12, color: c.textMuted),
+                        border: InputBorder.none,
+                        isDense: true,
+                        contentPadding: EdgeInsets.zero,
+                      ),
+                    ),
+                  ),
+                  if (_searchQuery.isNotEmpty)
+                    IconButton(
+                      icon: Icon(Icons.close_rounded, size: 16, color: c.textMuted),
+                      splashRadius: 14,
+                      onPressed: () {
+                        _searchCtrl.clear();
+                        setState(() => _searchQuery = '');
+                      },
+                    ),
+                ],
+              ),
+            ),
+          ),
 
-  @override
-  Widget build(BuildContext context) {
-    final library = context.read<LibraryService>();
+          const SizedBox(width: 20),
 
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: AnimatedContainer(
-        duration: const Duration(milliseconds: 150),
-        height: 38,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(10),
-          gradient: AppColors.primaryGradient,
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.primary.withOpacity(_hover ? 0.4 : 0.2),
-              blurRadius: _hover ? 12 : 6,
-              offset: const Offset(0, 2),
+          // Indicador interactivo de estado de API FastAPI
+          InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () async {
+              if (!api.isOnline) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(
+                    content: Text('Iniciando microservicio de IA local (FastAPI en 127.0.0.1:8642)...'),
+                    duration: Duration(seconds: 3),
+                  ),
+                );
+                await api.ensureServerRunning();
+              }
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: (api.isOnline ? AppColors.success : AppColors.error).withOpacity(0.12),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: (api.isOnline ? AppColors.success : AppColors.error).withOpacity(0.4),
+                ),
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: api.isOnline ? AppColors.success : AppColors.error,
+                    ),
+                  ),
+                  const SizedBox(width: 7),
+                  Text(
+                    api.isOnline ? loc.t('iaOnline') : loc.t('iaOffline'),
+                    style: TextStyle(
+                      fontSize: 10,
+                      fontWeight: FontWeight.w700,
+                      color: api.isOnline ? AppColors.success : AppColors.error,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 14),
+
+          // Campana de notificaciones con punto
+          Stack(
+            children: [
+              IconButton(
+                icon: Icon(Icons.notifications_none_rounded, size: 20, color: c.textSecondary),
+                splashRadius: 18,
+                onPressed: () {},
+              ),
+              Positioned(
+                right: 10,
+                top: 10,
+                child: Container(
+                  width: 6,
+                  height: 6,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: c.primary,
+                  ),
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(width: 14),
+
+          // Botones de ventana nativa (Minimizar, Maximizar, Cerrar)
+          WindowControls(isDark: c.isDark),
+        ],
+      ),
+    );
+  }
+
+  // ── Tarjeta de Álbum Real ─────────────────────────────────────────────────
+  Widget _buildRealAlbumCard({
+    required String albumName,
+    required List<Track> tracks,
+    required bool isFeatured,
+    required int gradientIndex,
+    required PlayerService player,
+    required ThemeColors c,
+  }) {
+    final firstTrack = tracks.first;
+    final colors = _getCoverGradients(c)[gradientIndex];
+
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
+      onTap: () => player.playTrack(firstTrack, playlist: tracks),
+      child: SizedBox(
+        width: 130,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Container(
+              width: 130,
+              height: 130,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(18),
+                gradient: LinearGradient(
+                  colors: colors,
+                  begin: Alignment.topLeft,
+                  end: Alignment.bottomRight,
+                ),
+                border: Border.all(
+                  color: isFeatured ? c.primary : Colors.transparent,
+                  width: isFeatured ? 2.5 : 0,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: colors.first.withOpacity(isFeatured ? 0.45 : 0.2),
+                    blurRadius: 16,
+                    offset: const Offset(0, 6),
+                  ),
+                ],
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: Stack(
+                children: [
+                  if (firstTrack.artwork != null)
+                    Image.memory(firstTrack.artwork!, width: 130, height: 130, fit: BoxFit.cover)
+                  else
+                    Center(
+                      child: Icon(
+                        Icons.album_rounded,
+                        size: 44,
+                        color: Colors.white.withOpacity(0.65),
+                      ),
+                    ),
+                  // Botón central de Play
+                  Center(
+                    child: Container(
+                      width: 38,
+                      height: 38,
+                      decoration: BoxDecoration(
+                        shape: BoxShape.circle,
+                        color: Colors.white.withOpacity(0.92),
+                        boxShadow: [
+                          BoxShadow(
+                            color: Colors.black.withOpacity(0.3),
+                            blurRadius: 10,
+                          ),
+                        ],
+                      ),
+                      child: Icon(
+                        Icons.play_arrow_rounded,
+                        color: c.primary,
+                        size: 24,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              albumName,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+                color: isFeatured ? c.primary : c.textPrimary,
+              ),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+            ),
+            const SizedBox(height: 1),
+            Text(
+              '${tracks.first.artist} · ${tracks.length} tracks',
+              style: TextStyle(fontSize: 10, color: c.textMuted),
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
             ),
           ],
         ),
-        child: ElevatedButton.icon(
-          onPressed: library.pickAndScan,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            foregroundColor: Colors.white,
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-            padding: const EdgeInsets.symmetric(horizontal: 14),
+      ),
+    );
+  }
+
+  // ── Elemento de Pista en Top Charts con Botón Híbrido IA ───────────────────
+  Widget _buildTrackItem(BuildContext context, Track track, bool isSelected, PlayerService player, LibraryService library, ThemeColors c) {
+    return GestureDetector(
+      onTap: () => player.playTrack(track, playlist: library.tracks),
+      onSecondaryTapDown: (details) {
+        showMenu(
+          context: context,
+          position: RelativeRect.fromLTRB(
+            details.globalPosition.dx,
+            details.globalPosition.dy,
+            details.globalPosition.dx + 1,
+            details.globalPosition.dy + 1,
           ),
-          icon: const Icon(Icons.sync_rounded, size: 15),
-          label: const Text(
-            'Escanear carpeta',
-            style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
-          ),
+          color: c.surface,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          items: [
+            PopupMenuItem(
+              onTap: () => Future.microtask(() => AddToPlaylistDialog.show(context, track)),
+              child: Row(
+                children: [
+                  Icon(Icons.playlist_add_rounded, size: 20, color: c.primary),
+                  const SizedBox(width: 10),
+                  Text('Añadir a lista de reproducción', style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              onTap: () => Future.microtask(() => HybridLyricsDialog.show(context, track)),
+              child: Row(
+                children: [
+                  Icon(Icons.auto_awesome_rounded, size: 18, color: c.primary),
+                  const SizedBox(width: 10),
+                  Text('Sincronizar Letras (IA)', style: TextStyle(color: c.textPrimary, fontSize: 13)),
+                ],
+              ),
+            ),
+            PopupMenuItem(
+              onTap: () => library.toggleFavorite(track),
+              child: Row(
+                children: [
+                  Icon(
+                    track.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                    size: 18,
+                    color: c.primary,
+                  ),
+                  const SizedBox(width: 10),
+                  Text(
+                    track.isFavorite ? 'Quitar de favoritos' : 'Añadir a favoritos',
+                    style: TextStyle(color: c.textPrimary, fontSize: 13),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        );
+      },
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        margin: const EdgeInsets.symmetric(vertical: 4),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          borderRadius: BorderRadius.circular(16),
+          gradient: isSelected ? c.primaryGradient : null,
+          color: isSelected ? null : Colors.transparent,
+          boxShadow: [
+            if (isSelected)
+              BoxShadow(
+                color: c.primary.withOpacity(0.4),
+                blurRadius: 20,
+                offset: const Offset(0, 6),
+              ),
+          ],
+        ),
+        child: Row(
+          children: [
+            // Thumbnail
+            Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                borderRadius: BorderRadius.circular(10),
+                color: isSelected ? Colors.white.withOpacity(0.2) : c.surface,
+                border: Border.all(color: isSelected ? Colors.transparent : c.glassBorder),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: track.artwork != null
+                  ? Image.memory(track.artwork!, fit: BoxFit.cover)
+                  : Center(
+                      child: Icon(
+                        Icons.music_note_rounded,
+                        size: 18,
+                        color: isSelected ? Colors.white : c.textSecondary,
+                      ),
+                    ),
+            ),
+            const SizedBox(width: 14),
+
+            // Título y Artista
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    track.title,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected ? Colors.white : c.textPrimary,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    track.artist,
+                    style: TextStyle(
+                      fontSize: 11,
+                      color: isSelected ? Colors.white.withOpacity(0.85) : c.textMuted,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+
+            // Duración
+            Text(
+              track.durationFormatted,
+              style: TextStyle(
+                fontSize: 11,
+                fontWeight: FontWeight.w600,
+                color: isSelected ? Colors.white.withOpacity(0.9) : c.textMuted,
+              ),
+            ),
+
+            const SizedBox(width: 8),
+
+            // Botón Letras / Modo Híbrido
+            IconButton(
+              tooltip: LyricsService.hasExistingLyrics(track.path, artist: track.artist, title: track.title)
+                  ? 'Letra sincronizada disponible (.lrc)'
+                  : 'Sincronizar Letras con IA (Modo Híbrido)',
+              icon: Icon(
+                LyricsService.hasExistingLyrics(track.path, artist: track.artist, title: track.title)
+                    ? Icons.lyrics_rounded
+                    : Icons.auto_awesome_rounded,
+                size: 16,
+                color: isSelected
+                    ? Colors.white
+                    : (LyricsService.hasExistingLyrics(track.path, artist: track.artist, title: track.title)
+                        ? const Color(0xFF39FF14)
+                        : c.primary),
+              ),
+              splashRadius: 16,
+              onPressed: () => HybridLyricsDialog.show(context, track),
+            ),
+
+            // Corazón (Favorito)
+            IconButton(
+              icon: Icon(
+                track.isFavorite ? Icons.favorite_rounded : Icons.favorite_border_rounded,
+                size: 16,
+                color: isSelected
+                    ? Colors.white
+                    : (track.isFavorite ? c.primary : c.textMuted),
+              ),
+              splashRadius: 16,
+              onPressed: () => library.toggleFavorite(track),
+            ),
+
+            // Añadir a Playlist
+            IconButton(
+              icon: Icon(
+                Icons.playlist_add_rounded,
+                size: 20,
+                color: isSelected ? Colors.white : c.textSecondary,
+              ),
+              tooltip: 'Añadir a lista de reproducción',
+              splashRadius: 18,
+              onPressed: () => AddToPlaylistDialog.show(context, track),
+            ),
+          ],
         ),
       ),
     );
   }
-}
 
-// ── FILA DE TRACK ─────────────────────────────────────────────────────────────
-
-class _TrackRow extends StatefulWidget {
-  final Track track;
-  final int index;
-
-  const _TrackRow({required this.track, required this.index});
-
-  @override
-  State<_TrackRow> createState() => _TrackRowState();
-}
-
-class _TrackRowState extends State<_TrackRow> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final player = context.read<PlayerService>();
-    final current = context.watch<PlayerService>().currentMedia;
-    final isPlaying = current?.uri == Uri.file(widget.track.path).toString();
-
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        onTap: () => player.open(
-          widget.track.path,
-          title: widget.track.title,
-          artist: widget.track.artist,
-          artwork: widget.track.artwork,
-        ),
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-          margin: const EdgeInsets.only(bottom: 4),
-          decoration: BoxDecoration(
-            color: isPlaying
-                ? AppColors.primary.withOpacity(0.12)
-                : _hover
-                    ? AppColors.glassHover
-                    : Colors.transparent,
-            borderRadius: BorderRadius.circular(10),
-            border: Border.all(
-              color: isPlaying
-                  ? AppColors.primary.withOpacity(0.3)
-                  : _hover
-                      ? AppColors.glassBorder
-                      : Colors.transparent,
-              width: 1,
-            ),
-          ),
-          child: Row(
+  // ── Tarjeta Informativa de Colección ──────────────────────────────────────
+  Widget _buildInfoPanelCard(BuildContext context, LibraryService library, ApiService api, LocaleService loc, ThemeColors c) {
+    return Container(
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: c.surface,
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: c.glassBorder),
+        boxShadow: [
+          if (!c.isDark)
+            BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 10, offset: const Offset(0, 4)),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
             children: [
-              // Artwork / índice / reproduciendo
-              SizedBox(
-                width: 36,
-                height: 36,
-                child: _TrackArtwork(
-                  artwork: widget.track.artwork,
-                  isPlaying: isPlaying,
-                  isHovered: _hover,
-                  index: widget.index,
+              Icon(Icons.flash_on_rounded, color: c.primary, size: 20),
+              const SizedBox(width: 8),
+              Text(
+                loc.t('syncLyricsHybrid').toUpperCase(),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w800,
+                  color: c.primary,
+                  letterSpacing: 0.5,
                 ),
               ),
-              const SizedBox(width: 12),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Text(
+            'El Modo Híbrido consulta fuentes online para letras oficiales y ejecuta Forced Alignment local con Whisper para alineación milimétrica con el audio local.',
+            style: TextStyle(fontSize: 11, color: c.textSecondary, height: 1.4),
+          ),
+          const SizedBox(height: 14),
+          Row(
+            children: [
+              _StatusPill(
+                label: '${library.realTracks.length} canciones',
+                icon: Icons.audio_file_rounded,
+                c: c,
+              ),
+              const SizedBox(width: 8),
+              _StatusPill(
+                label: api.isOnline ? 'FastAPI 8642' : 'IA Offline',
+                icon: Icons.memory_rounded,
+                c: c,
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
 
-              // Título + Artista
-              Expanded(
-                flex: 4,
+  // ── Playlists / Filtros Rápidos en Grid ───────────────────────────────────
+  Widget _buildQuickFilterCards(LibraryService library, PlayerService player, ThemeColors c) {
+    final filters = [
+      {
+        'title': 'Favoritos',
+        'count': '${library.favoriteTracks.length} canciones',
+        'gradient': [c.primary, c.accentPreset.dark],
+        'icon': Icons.favorite_rounded,
+        'action': () {
+          if (library.favoriteTracks.isNotEmpty) {
+            player.playTrack(library.favoriteTracks.first, playlist: library.favoriteTracks);
+          }
+        },
+      },
+      {
+        'title': 'Toda la Biblioteca',
+        'count': '${library.realTracks.length} canciones',
+        'gradient': [c.accentPreset.dark, c.backgroundAlt],
+        'icon': Icons.queue_music_rounded,
+        'action': () {
+          if (library.realTracks.isNotEmpty) {
+            player.playTrack(library.realTracks.first, playlist: library.realTracks);
+          }
+        },
+      },
+    ];
+
+    return Row(
+      children: filters.map((f) {
+        final colors = f['gradient'] as List<Color>;
+        return Expanded(
+          child: Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: f['action'] as VoidCallback,
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(colors: colors, begin: Alignment.topLeft, end: Alignment.bottomRight),
+                  borderRadius: BorderRadius.circular(16),
+                  boxShadow: [
+                    BoxShadow(
+                      color: colors.first.withOpacity(0.3),
+                      blurRadius: 12,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
+                ),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
+                    Icon(f['icon'] as IconData, color: Colors.white, size: 22),
+                    const SizedBox(height: 10),
                     Text(
-                      widget.track.title,
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: isPlaying ? AppColors.primaryLight : AppColors.textPrimary,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      f['title'] as String,
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.white),
                     ),
-                    const SizedBox(height: 1),
                     Text(
-                      widget.track.artist,
-                      style: const TextStyle(
-                        fontSize: 11,
-                        color: AppColors.textSecondary,
-                      ),
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
+                      f['count'] as String,
+                      style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.8)),
                     ),
                   ],
                 ),
               ),
-
-              // Álbum
-              Expanded(
-                flex: 3,
-                child: Text(
-                  widget.track.album,
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: _hover ? AppColors.textPrimary : AppColors.textSecondary,
-                  ),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-              ),
-
-              // Duración
-              Text(
-                LibraryService.formatDuration(widget.track.duration),
-                style: const TextStyle(
-                  fontSize: 12,
-                  color: AppColors.textSecondary,
-                ),
-              ),
-              const SizedBox(width: 8),
-
-              // Botón rápido de IA
-              _AIButton(track: widget.track),
-            ],
+            ),
           ),
-        ),
-      ),
+        );
+      }).toList(),
     );
   }
 }
 
-class _TrackArtwork extends StatelessWidget {
-  final Uint8List? artwork;
-  final bool isPlaying;
-  final bool isHovered;
-  final int index;
-
-  const _TrackArtwork({
-    required this.artwork,
-    required this.isPlaying,
-    required this.isHovered,
-    required this.index,
-  });
+class _StatusPill extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final ThemeColors c;
+  const _StatusPill({required this.label, required this.icon, required this.c});
 
   @override
   Widget build(BuildContext context) {
-    if (isPlaying) {
-      return Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(6),
-          color: AppColors.primary.withOpacity(0.2),
-        ),
-        child: const Icon(Icons.equalizer_rounded, color: AppColors.primaryLight, size: 18),
-      );
-    }
-    if (isHovered) {
-      return Container(
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(6),
-          color: AppColors.glassHover,
-        ),
-        child: const Icon(Icons.play_arrow_rounded, color: AppColors.secondary, size: 20),
-      );
-    }
-    if (artwork != null) {
-      return ClipRRect(
-        borderRadius: BorderRadius.circular(6),
-        child: Image.memory(artwork!, fit: BoxFit.cover),
-      );
-    }
     return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(6),
-        color: AppColors.surfaceHover,
+        color: c.backgroundAlt,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: c.glassBorder),
       ),
-      child: Center(
-        child: Text(
-          index.toString().padLeft(2, '0'),
-          style: const TextStyle(
-            fontSize: 10,
-            fontWeight: FontWeight.bold,
-            color: AppColors.textSecondary,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class _AIButton extends StatefulWidget {
-  final Track track;
-  const _AIButton({required this.track});
-
-  @override
-  State<_AIButton> createState() => _AIButtonState();
-}
-
-class _AIButtonState extends State<_AIButton> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    return MouseRegion(
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: Tooltip(
-        message: 'Transcribir con IA',
-        child: AnimatedContainer(
-          duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.all(5),
-          decoration: BoxDecoration(
-            color: _hover ? AppColors.primary.withOpacity(0.2) : Colors.transparent,
-            shape: BoxShape.circle,
-          ),
-          child: Icon(
-            Icons.auto_awesome_rounded,
-            size: 14,
-            color: _hover ? AppColors.primaryLight : AppColors.textSecondary,
-          ),
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: c.primaryLight),
+          const SizedBox(width: 5),
+          Text(label, style: TextStyle(fontSize: 11, color: c.textSecondary, fontWeight: FontWeight.w600)),
+        ],
       ),
     );
   }

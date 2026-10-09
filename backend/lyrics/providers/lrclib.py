@@ -14,7 +14,7 @@ from typing import Any
 
 from .base import LyricsProvider
 from ..models import LyricData, LyricSource
-from ..normalizer import clean_query, normalize_for_match, round_duration, generate_search_variations
+from ..normalizer import clean_query, normalize_for_match, round_duration, generate_search_variations, is_artist_compatible, is_lyrics_script_compatible
 
 try:
     from rapidfuzz import fuzz
@@ -31,7 +31,8 @@ except ImportError:
 
 
 class LrclibProvider(LyricsProvider):
-    name: str = "lrclib"
+    name: str = "Fuente 1"
+    is_synced_provider: bool = True
     BASE_URL: str = "https://lrclib.net/api"
     TIMEOUT_SECONDS: int = 5
     USER_AGENT: str = "Titofy/2.0 (https://github.com/titofy/titofy)"
@@ -163,6 +164,10 @@ class LrclibProvider(LyricsProvider):
             c_title_norm = normalize_for_match(c_title)
             c_artist_norm = normalize_for_match(c_artist)
 
+            # Validación estricta de artista si se especificó
+            if artist and not is_artist_compatible(artist, c_artist):
+                continue
+
             # 1. Similitud de texto inteligente (soporta títulos largos con nombres de colaboradores)
             if HAS_RAPIDFUZZ:
                 title_sim = max(
@@ -207,7 +212,7 @@ class LrclibProvider(LyricsProvider):
 
         if best_candidate and best_score >= 65.0:
             log.info(
-                f"Mejor candidato LRCLIB seleccionado: '{best_candidate.get('artistName')}' - "
+                f"[Fuente 1 / LRCLIB] Candidato confirmado: '{best_candidate.get('artistName')}' - "
                 f"'{best_candidate.get('trackName')}' (score={best_score:.1f})"
             )
             return best_candidate
@@ -220,7 +225,7 @@ class LrclibProvider(LyricsProvider):
         fallback_title: str,
         fallback_artist: str,
         fallback_duration: int | None,
-    ) -> LyricData:
+    ) -> LyricData | None:
         synced_lyrics = record.get("syncedLyrics")
         plain_lyrics = record.get("plainLyrics")
 
@@ -228,6 +233,10 @@ class LrclibProvider(LyricsProvider):
         artist = record.get("artistName") or fallback_artist
         album = record.get("albumName")
         duration = round_duration(record.get("duration")) or fallback_duration
+
+        lyrics_to_check = synced_lyrics or plain_lyrics or ""
+        if not is_lyrics_script_compatible(f"{artist} {title}", lyrics_to_check):
+            return None
 
         if synced_lyrics and synced_lyrics.strip():
             # Nivel 1: Sincronizada online
@@ -244,13 +253,6 @@ class LrclibProvider(LyricsProvider):
             return lyric_data
 
         # Nivel 2: Solo texto plano disponible (para Forced Alignment)
-        lines = []
-        if plain_lyrics:
-            for l in plain_lyrics.splitlines():
-                l_strip = l.strip()
-                if l_strip:
-                    lines.append(LyricData(text=l_strip, start=None))  # type: ignore
-
         from ..models import LyricLine
         real_lines = [LyricLine(text=l.strip(), start=None) for l in (plain_lyrics or "").splitlines() if l.strip()]
 

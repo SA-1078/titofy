@@ -27,7 +27,10 @@ def yellow(text: str) -> str:
 
 
 def print_yellow(text: str):
-    print(yellow(text))
+    try:
+        print(yellow(text))
+    except (BrokenPipeError, OSError):
+        pass
 
 
 def setup_cuda_dlls():
@@ -69,14 +72,17 @@ def setup_cuda_dlls():
 
 
 def detect_device() -> tuple[str, str]:
-    """Detecta automáticamente si hay GPU CUDA disponible."""
+    """Detecta automáticamente si hay GPU CUDA disponible y funcional."""
     try:
         import torch
         if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
-            return "cuda", name
+            torch.cuda.init()
+            if torch.cuda.device_count() > 0:
+                _ = torch.zeros(1, device="cuda")
+                name = torch.cuda.get_device_name(0)
+                return "cuda", name
     except Exception as exc:
-        print_yellow(f"  ⚠️  CUDA no se pudo inicializar correctamente: {exc}")
+        print_yellow(f"  ⚠️  CUDA no disponible o fallo de driver ({exc}). Fallback a CPU.")
     return "cpu", "CPU"
 
 
@@ -121,8 +127,9 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
 
 def load_whisper_model(model_name: str, device: str, compute_type: str = "auto"):
     """
-    Carga el modelo Whisper. Prioriza 'faster-whisper' mediante CTranslate2 para máxima
-    velocidad, menor consumo de RAM y soporte de cuantización, con fallback a PyTorch Whisper.
+    Carga el modelo Whisper con tolerancia a fallos de GPU/drivers.
+    Prioriza 'faster-whisper' con fallback a PyTorch Whisper y reintento automático
+    en CPU si CUDA o el driver de NVIDIA fallan.
     """
     try:
         from lyric_config import get_config
@@ -135,6 +142,7 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     model_name_fw = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
     model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
+    # 1. Intentar faster-whisper en el dispositivo seleccionado
     try:
         import stable_whisper
 
@@ -144,23 +152,38 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
             selected_compute = compute_type
 
         log.info(f"Cargando faster-whisper ({model_name_fw}) en {device} ({selected_compute})...")
-
         model = stable_whisper.load_faster_whisper(model_name_fw, device=device, compute_type=selected_compute)
         return model, True
 
     except Exception as e:
-        log.warning(f"Fallback desde faster-whisper: {e}")
-        print_yellow(f"  ⚠️  No se pudo usar faster-whisper ({e}).")
-        print_yellow("     Usando motor estándar de PyTorch como fallback seguro.")
+        log.warning(f"Fallo faster-whisper en {device}: {e}")
+        # Si falló en CUDA, reintentar faster-whisper en CPU
+        if device == "cuda":
+            try:
+                import stable_whisper
+                log.info(f"Reintentando faster-whisper ({model_name_fw}) en CPU (int8)...")
+                model = stable_whisper.load_faster_whisper(model_name_fw, device="cpu", compute_type="int8")
+                return model, True
+            except Exception as e_cpu:
+                log.warning(f"Fallo faster-whisper en CPU: {e_cpu}")
 
+    # 2. Fallback a PyTorch Whisper estándar
     try:
         import stable_whisper as whisper
-        model = whisper.load_model(model_name_std, device=device)
-        return model, False
+        target_dev = device
+        try:
+            log.info(f"Cargando PyTorch Whisper ({model_name_std}) en {target_dev}...")
+            model = whisper.load_model(model_name_std, device=target_dev)
+            return model, False
+        except Exception as e_std:
+            if target_dev == "cuda":
+                log.warning(f"Fallo PyTorch Whisper en CUDA ({e_std}). Reintentando en CPU...")
+                model = whisper.load_model(model_name_std, device="cpu")
+                return model, False
+            raise e_std
     except Exception as e:
         log.error(f"Error crítico al cargar {model_name}: {e}")
-        print(f"\n  ❌ Error crítico al cargar el modelo Whisper: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"Error al cargar el modelo Whisper ({model_name}): {e}")
 
 
 def resolve_local_binary(binary_name: str) -> str | None:
@@ -176,13 +199,11 @@ def validate_audio_file(audio_path: str) -> float | None:
     """Valida existencia, tamaño y lectura básica del audio antes de cargar Whisper."""
     if not os.path.exists(audio_path):
         log.error(f"No se encontro el archivo: {audio_path}")
-        print(f"\n  ❌ No se encontro el archivo: {audio_path}", file=sys.stderr)
-        sys.exit(1)
+        raise FileNotFoundError(f"No se encontró el archivo de audio: {audio_path}")
 
     if os.path.getsize(audio_path) <= 0:
         log.error(f"Archivo de audio vacio: {audio_path}")
-        print(f"\n  ❌ El archivo de audio esta vacio: {audio_path}", file=sys.stderr)
-        sys.exit(1)
+        raise ValueError(f"El archivo de audio está vacío: {audio_path}")
 
     ffprobe = resolve_local_binary("ffprobe")
     if not ffprobe:
@@ -205,9 +226,8 @@ def validate_audio_file(audio_path: str) -> float | None:
 
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "sin detalle").strip()
-        log.error(f"ffprobe no pudo leer el audio: {detail}")
-        print(f"\n  ❌ ffprobe no pudo leer el archivo de audio: {detail}", file=sys.stderr)
-        sys.exit(1)
+        log.warning(f"ffprobe reportó advertencia en el archivo: {detail}")
+        return None
 
     try:
         duration = float(result.stdout.strip())
@@ -215,8 +235,7 @@ def validate_audio_file(audio_path: str) -> float | None:
         duration = 0.0
 
     if duration <= 0:
-        log.error("Duracion de audio invalida")
-        print("\n  ❌ El archivo de audio no tiene duracion valida.\n", file=sys.stderr)
-        sys.exit(1)
+        log.warning("Duración de audio no determinada con ffprobe; continuando.")
+        return None
 
     return duration

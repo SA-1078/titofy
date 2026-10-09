@@ -1,0 +1,23 @@
+==============================================================================
+                    ¡INSTALACIÓN COMPLETADA CON ÉXITO!
+==============================================================================
+
+Titofy se ha instalado correctamente en tu computadora.
+
+CONSEJOS RÁPIDOS PARA COMENZAR:
+------------------------------------------------------------------------------
+1. AÑADE TU MÚSICA:
+   Abre Titofy y haz clic en "Añadir música" o en la pestaña "Canciones" para
+   seleccionar las carpetas donde guardas tus pistas de audio.
+
+2. LETRAS AUTOMÁTICAS:
+   Al reproducir cualquier canción, Titofy buscará automáticamente la letra
+   sincronizada. Si deseas verla en pantalla completa o karaoke, pulsa el botón
+   de letras en el reproductor inferior.
+
+3. ESTUDIO DE IA (SIN INTERNET):
+   Si tienes una canción y no existe letra en internet, ve a la pestaña "Studio IA"
+   para transcribir la voz del audio y generar letras sincronizadas automáticamente.
+
+¡Disfruta de la mejor experiencia musical!
+==============================================================================

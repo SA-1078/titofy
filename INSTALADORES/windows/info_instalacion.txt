@@ -1,0 +1,36 @@
+==============================================================================
+                      BIENVENIDO A TITOFY DESKTOP v1.0.0
+==============================================================================
+
+Gracias por instalar Titofy, la suite inteligente de música, letras sincronizadas
+y karaoke potenciada con Inteligencia Artificial.
+
+------------------------------------------------------------------------------
+¿QUÉ SE INSTALARÁ EN TU SISTEMA?
+------------------------------------------------------------------------------
+1. REPRODUCTOR TITOFY NATIVO (64-bit):
+   - Motor de audio de alta fidelidad con soporte para MP3, FLAC, WAV, M4A, OGG.
+   - Sincronización de letras versículo por versículo en tiempo real y modo karaoke.
+   - Espectro visualizador reactivo al ritmo de la música con múltiples estilos.
+   - Selector de colores de interfaz y modo oscuro cinematográfico.
+
+2. MOTOR DE IA WHISPER OFFLINE INTEGRADO:
+   - Capacidad de transcribir audio a letras sincronizadas sin conexión a internet.
+   - Algoritmo de alineación forzada (Forced Alignment) para calibrar el tiempo
+     exacto de cada verso con la voz del cantante.
+
+3. ENTORNO DE EJECUCIÓN AUTÓNOMO:
+   - Todo viene preconfigurado y empaquetado para tu comodidad.
+   - NO necesitas instalar Python, ni configurar variables de entorno, ni tener
+     conocimientos de avanzados. 
+   - El instalador deja todo listo para que hagas doble clic y disfrutes de tu música.
+
+------------------------------------------------------------------------------
+REQUISITOS DEL SISTEMA:
+- Windows 10 o Windows 11 (64-bit).
+- Mínimo 4 GB de memoria RAM.
+- Aceleración opcional: Si tienes tarjeta gráfica NVIDIA, Titofy aprovechará 
+  automáticamente los núcleos CUDA para transcripciones ultra rápidas.
+
+Presiona "Siguiente" para aceptar la licencia y continuar con la instalación.
+==============================================================================

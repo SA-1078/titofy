@@ -25,10 +25,22 @@ import sys
 # Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from logger import SafeStream, get_logger
+if not isinstance(sys.stdout, SafeStream):
+    sys.stdout = SafeStream(sys.stdout)
+if not isinstance(sys.stderr, SafeStream):
+    sys.stderr = SafeStream(sys.stderr)
+
 import uuid
 import time
 import threading
+import signal
 from datetime import datetime
+
+# Evitar que una escritura sobre un pipe/socket cerrado
+# termine todo el proceso mediante SIGPIPE.
+if hasattr(signal, "SIGPIPE"):
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -126,6 +138,10 @@ class ResolveLyricsRequest(BaseModel):
     language: Optional[str] = "auto"
     output_path: Optional[str] = None
     force: Optional[bool] = False
+
+
+class PreloadModelRequest(BaseModel):
+    model: Optional[str] = "small"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -291,11 +307,18 @@ async def resolve_lyrics(req: ResolveLyricsRequest):
     """
     Resuelve la letra de una canción usando el motor híbrido (Caché → Online → Forced Alignment → Whisper).
     """
+    import sys
+    import importlib
+    if "lyrics.resolver" in sys.modules:
+        try:
+            importlib.reload(sys.modules["lyrics.resolver"])
+        except Exception:
+            pass
     from lyrics.resolver import LyricsResolver
     resolver = LyricsResolver()
 
     try:
-        data = resolver.resolve(
+        data = await resolver.resolve_async(
             artist=req.artist,
             title=req.title,
             duration=req.duration,
@@ -311,8 +334,12 @@ async def resolve_lyrics(req: ResolveLyricsRequest):
         return data.to_dict()
     except HTTPException:
         raise
+    except (ValueError, FileNotFoundError) as e:
+        log.warning(f"No se pudo resolver letra: {e}")
+        raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        log.error(f"Error en /lyrics/resolve: {e}")
+        import traceback
+        log.error(f"Error en /lyrics/resolve: {e}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -344,21 +371,119 @@ async def health():
     }
 
 
+@app.get("/models")
+async def list_models():
+    """Consulta los 3 modelos Whisper oficiales (base, small, turbo) y su estado de descarga."""
+    try:
+        from whisper_engine.loader import is_model_downloaded
+        models = [
+            {
+                "id": "base",
+                "name": "BASE (Rápido)",
+                "size": "~145 MB",
+                "description": "Rápido y ligero para audios claros",
+                "downloaded": is_model_downloaded("base"),
+            },
+            {
+                "id": "small",
+                "name": "SMALL (Recomendado)",
+                "size": "~465 MB",
+                "description": "Equilibrado en precisión y velocidad",
+                "downloaded": is_model_downloaded("small"),
+            },
+            {
+                "id": "turbo",
+                "name": "TURBO (large-v3)",
+                "size": "~1.5 GB",
+                "description": "Máxima fidelidad en canciones complejas",
+                "downloaded": is_model_downloaded("turbo"),
+            },
+        ]
+        return {"models": models, "loaded": list(model_cache.keys())}
+    except Exception as e:
+        return {"models": [], "error": str(e)}
+
+
+@app.post("/models/preload")
+async def preload_model(req: Optional[PreloadModelRequest] = None):
+    """Descarga/precarga en caché un modelo Whisper por adelantado."""
+    model_name = (req.model if req and req.model else "small")
+    import asyncio
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, _get_model, model_name)
+    return {"status": "ok", "model": model_name, "downloaded": True}
+
+
 @app.get("/config")
 async def get_config_endpoint():
     """Configuración actual."""
     return get_config()
 
 
+@app.post("/shutdown")
+async def shutdown():
+    """Permite reiniciar el proceso del servidor para recargar código actualizado."""
+    import threading
+    def _kill():
+        import time
+        time.sleep(0.2)
+        os._exit(0)
+    threading.Thread(target=_kill, daemon=True).start()
+    return {"status": "shutting_down"}
+
+
 # ──────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ──────────────────────────────────────────────────────────────────────────────
+def _free_port_if_in_use(port: int):
+    """Mata cualquier proceso huérfano anterior que esté ocupando el puerto para permitir inicio limpio."""
+    import socket
+    import subprocess
+    import time
+
+    # Verificar si el puerto ya está en uso
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        in_use = (s.connect_ex(("127.0.0.1", port)) == 0)
+
+    if not in_use:
+        return
+
+    log.warning(f"Puerto {port} ocupado por un proceso previo. Terminando proceso huérfano para inicio limpio...")
+    current_pid = os.getpid()
+
+    if os.name == "nt":
+        try:
+            out = subprocess.check_output(f"netstat -ano | findstr :{port}", shell=True, text=True)
+            for line in out.splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 5 and "LISTENING" in parts:
+                    pid = int(parts[-1])
+                    if pid != current_pid and pid > 0:
+                        subprocess.run(f"taskkill /F /PID {pid}", shell=True, capture_output=True)
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(["fuser", "-k", f"{port}/tcp"], capture_output=True)
+        except Exception:
+            try:
+                out = subprocess.check_output(["lsof", "-t", f"-i:{port}"], text=True)
+                for pid_str in out.splitlines():
+                    pid = int(pid_str.strip())
+                    if pid != current_pid and pid > 0:
+                        os.kill(pid, 9)
+            except Exception:
+                pass
+
+    time.sleep(0.4)
+
 
 if __name__ == "__main__":
     import uvicorn
 
     host = cfg["api"]["host"]
     port = cfg["api"]["port"]
+
+    # Liberar puerto huérfano si estaba ocupado
+    _free_port_if_in_use(port)
 
     print()
     print("  ╭──────────────────────────────────────────────────╮")
