@@ -269,10 +269,41 @@ def transcribe_audio(
 
 
 
-    result_obj: typing.Any = result
-    result_dict = result_obj.to_dict() if hasattr(result_obj, "to_dict") else dict(result_obj)
-    detected_lang = result_dict.get("language", language)
-    segments = result_dict.get("segments", [])
+    detected_lang = language
+    segments = []
+    if hasattr(result, "to_dict"):
+        result_dict = result.to_dict()
+        detected_lang = result_dict.get("language", language)
+        segments = result_dict.get("segments", [])
+    elif isinstance(result, tuple) and len(result) == 2:
+        # faster-whisper WhisperModel: (segments_generator, info)
+        segments_gen, info = result
+        detected_lang = getattr(info, "language", language)
+        for s in segments_gen:
+            words = []
+            if hasattr(s, "words") and s.words:
+                for w in s.words:
+                    words.append({
+                        "word": getattr(w, "word", ""),
+                        "start": getattr(w, "start", 0.0),
+                        "end": getattr(w, "end", 0.0),
+                        "probability": getattr(w, "probability", 1.0),
+                    })
+            segments.append({
+                "id": getattr(s, "id", len(segments)),
+                "start": getattr(s, "start", 0.0),
+                "end": getattr(s, "end", 0.0),
+                "text": getattr(s, "text", ""),
+                "words": words,
+            })
+    else:
+        try:
+            result_dict = dict(result)
+            detected_lang = result_dict.get("language", language)
+            segments = result_dict.get("segments", [])
+        except Exception:
+            pass
+
     title = os.path.splitext(basename)[0]
 
     if not segments:

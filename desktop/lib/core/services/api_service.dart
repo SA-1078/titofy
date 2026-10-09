@@ -99,7 +99,7 @@ class ApiService extends ChangeNotifier {
         debugPrint('[ApiService] Iniciando ejecutable autónomo de FastAPI: ${exeServer.path}');
         _backendProcess = await Process.start(
           exeServer.path,
-          [],
+          ['--parent-pid', pid.toString()],
           workingDirectory: backendDir,
           mode: ProcessStartMode.normal,
         );
@@ -114,7 +114,7 @@ class ApiService extends ChangeNotifier {
 
         _backendProcess = await Process.start(
           pythonBin,
-          ['-u', serverScript],
+          ['-u', serverScript, '--parent-pid', pid.toString()],
           workingDirectory: backendDir,
           environment: {
             'VIRTUAL_ENV': venvDir,
@@ -131,18 +131,22 @@ class ApiService extends ChangeNotifier {
       });
       _backendProcess?.stderr.transform(utf8.decoder).listen((data) {
         debugPrint('[FastAPI-stderr] $data');
-        _lastErrorMessage = data;
+        _lastErrorMessage = data.trim();
+        notifyListeners();
       });
 
       _backendProcess?.exitCode.then((code) {
         debugPrint('[ApiService] Backend process finalizó con código: $code');
+        if (code != 0 && (_lastErrorMessage == null || _lastErrorMessage!.isEmpty)) {
+          _lastErrorMessage = 'El backend se cerró inesperadamente (código: $code)';
+        }
         _isOnline = false;
         notifyListeners();
       });
 
-      // Esperar hasta 8 segundos a que la API responda
-      for (int i = 0; i < 24; i++) {
-        await Future.delayed(const Duration(milliseconds: 350));
+      // Esperar hasta 15 segundos a que la API responda (30 iteraciones x 500ms)
+      for (int i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
         if (await checkHealth() != null) {
           _isStartingBackend = false;
           _lastErrorMessage = null;
@@ -168,8 +172,10 @@ class ApiService extends ChangeNotifier {
     final currentDir = Directory.current.path;
     final candidates = [
       '$exeDir/backend',
+      exeDir,
       '$exeDir/../backend',
       '$currentDir/backend',
+      currentDir,
       '$currentDir/../backend',
       '$currentDir/../../backend',
       '/home/santiago007/Documentos/titofy/backend',
@@ -376,16 +382,41 @@ class ApiService extends ChangeNotifier {
     return [];
   }
 
-  /// Descarga / precarga en caché el modelo seleccionado
+  /// Descarga / precarga en caché el modelo seleccionado con sondeo no bloqueante
   Future<bool> preloadModel(String model) async {
     try {
       final res = await _client.post(
         Uri.parse('$_baseUrl/models/preload'),
         headers: {'Content-Type': 'application/json'},
         body: jsonEncode({'model': model}),
-      ).timeout(const Duration(minutes: 6));
-      return res.statusCode == 200;
-    } catch (_) {
+      ).timeout(const Duration(seconds: 15));
+
+      if (res.statusCode != 200) return false;
+      final body = jsonDecode(utf8.decode(res.bodyBytes));
+      if (body['status'] == 'ready') return true;
+
+      // Sondear /models/status/$model periódicamente (hasta 15 minutos)
+      for (int i = 0; i < 300; i++) {
+        await Future.delayed(const Duration(seconds: 3));
+        try {
+          final statusRes = await _client
+              .get(Uri.parse('$_baseUrl/models/status/$model'))
+              .timeout(const Duration(seconds: 5));
+          if (statusRes.statusCode == 200) {
+            final st = jsonDecode(utf8.decode(statusRes.bodyBytes));
+            if (st['status'] == 'ready') return true;
+            if (st['status'] == 'error') {
+              _lastErrorMessage = st['error']?.toString() ?? 'Error al descargar el modelo';
+              notifyListeners();
+              return false;
+            }
+          }
+        } catch (_) {}
+      }
+      return false;
+    } catch (e) {
+      _lastErrorMessage = e.toString();
+      notifyListeners();
       return false;
     }
   }

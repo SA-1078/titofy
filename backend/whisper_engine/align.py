@@ -266,8 +266,28 @@ def align_lyrics(
                 log.error(f"Fallo en alineación: {e}")
                 raise RuntimeError(f"Fallo en alineación con audio: {e}")
 
-    result_dict = result.to_dict()
-    segments = result_dict.get("segments", [])
+    segments = []
+    if hasattr(result, "to_dict"):
+        segments = result.to_dict().get("segments", [])
+    elif isinstance(result, tuple) and len(result) == 2:
+        segments_gen, _ = result
+        for s in segments_gen:
+            words = []
+            if hasattr(s, "words") and s.words:
+                for w in s.words:
+                    words.append({
+                        "word": getattr(w, "word", ""),
+                        "start": getattr(w, "start", 0.0),
+                        "end": getattr(w, "end", 0.0),
+                    })
+            segments.append({
+                "start": getattr(s, "start", 0.0),
+                "end": getattr(s, "end", 0.0),
+                "text": getattr(s, "text", ""),
+                "words": words,
+            })
+    elif isinstance(result, dict):
+        segments = result.get("segments", [])
 
     # Extraer todas las palabras reconocidas con timestamps reales
     all_words: list[dict[str, typing.Any]] = []

@@ -464,17 +464,35 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                     const SizedBox(width: 10),
-                    Text(
-                      api.isOnline
-                          ? 'Conexión activa con FastAPI (http://127.0.0.1:8642)'
-                          : 'Servidor local no detectado en el puerto 8642',
-                      style: TextStyle(
-                        fontSize: 13,
-                        fontWeight: FontWeight.bold,
-                        color: api.isOnline ? AppColors.success : AppColors.error,
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            api.isOnline
+                                ? 'Conexión activa con FastAPI (http://127.0.0.1:8642)'
+                                : 'Servidor local no detectado en el puerto 8642',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.bold,
+                              color: api.isOnline ? AppColors.success : AppColors.error,
+                            ),
+                          ),
+                          if (!api.isOnline && api.lastErrorMessage != null) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              api.lastErrorMessage!,
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: AppColors.error.withOpacity(0.85),
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
                       ),
                     ),
-                    const Spacer(),
                     ElevatedButton.icon(
                       icon: api.isStartingBackend
                           ? const SizedBox(
