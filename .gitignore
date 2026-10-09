@@ -62,3 +62,8 @@ a.txt
 # Documentación interna de desarrollo
 *README_DEV*.md
 INSTALADORES/README_DEV.md
+
+# Capturas de pantalla y medios locales
+UI_titofy.jpg
+UI_titofy_3.jpg
+Captura*.png

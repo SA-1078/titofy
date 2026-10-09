@@ -18,11 +18,9 @@ echo "=========================================================="
 echo "          🚀 INSTALADOR OFICIAL DE TITOFY (LINUX)         "
 echo "=========================================================="
 
-# 1. Compilar release si aún no existe
-if [ ! -f "$BUNDLE_SRC/desktop" ]; then
-    echo "⚙️ Compilando release nativo de Titofy con Flutter..."
-    (cd "$REPO_DIR/desktop" && flutter build linux --release)
-fi
+# 1. Compilar release nativo de Flutter
+echo "⚙️ Compilando release nativo más reciente de Titofy con Flutter..."
+(cd "$REPO_DIR/desktop" && flutter build linux --release)
 
 echo "📦 1. Creando directorios del sistema de usuario..."
 mkdir -p "$INSTALL_DIR"

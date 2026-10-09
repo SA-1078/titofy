@@ -89,37 +89,49 @@ class ApiService extends ChangeNotifier {
         return false;
       }
 
-      final pythonBin = _resolvePythonExecutable(backendDir);
-      final serverScript = '$backendDir/api_server.py';
-      final venvDir = '$backendDir/.venv';
-
       // Si el puerto está ocupado por un proceso zombie previo que no responde, liberarlo
       await _freePort(8642);
 
-      debugPrint('[ApiService] Iniciando backend: $pythonBin $serverScript (cwd: $backendDir)');
-
       final isWin = Platform.isWindows;
-      final venvBinDir = isWin ? '$backendDir\\.venv\\Scripts' : '$venvDir/bin';
-      final pathSep = isWin ? ';' : ':';
+      final exeServer = File('$backendDir/api_server.exe');
 
-      _backendProcess = await Process.start(
-        pythonBin,
-        ['-u', serverScript],
-        workingDirectory: backendDir,
-        environment: {
-          'VIRTUAL_ENV': venvDir,
-          'PATH': '$venvBinDir$pathSep${Platform.environment['PATH'] ?? ''}',
-          'PYTHONPATH': backendDir,
-          'PYTHONUNBUFFERED': '1',
-        },
-        mode: ProcessStartMode.normal,
-      );
+      if (isWin && exeServer.existsSync()) {
+        debugPrint('[ApiService] Iniciando ejecutable autónomo de FastAPI: ${exeServer.path}');
+        _backendProcess = await Process.start(
+          exeServer.path,
+          [],
+          workingDirectory: backendDir,
+          mode: ProcessStartMode.normal,
+        );
+      } else {
+        final pythonBin = _resolvePythonExecutable(backendDir);
+        final serverScript = '$backendDir/api_server.py';
+        final venvDir = '$backendDir/.venv';
+        final venvBinDir = isWin ? '$backendDir\\.venv\\Scripts' : '$venvDir/bin';
+        final pathSep = isWin ? ';' : ':';
+
+        debugPrint('[ApiService] Iniciando backend con Python: $pythonBin $serverScript (cwd: $backendDir)');
+
+        _backendProcess = await Process.start(
+          pythonBin,
+          ['-u', serverScript],
+          workingDirectory: backendDir,
+          environment: {
+            'VIRTUAL_ENV': venvDir,
+            'PATH': '$venvBinDir$pathSep${Platform.environment['PATH'] ?? ''}',
+            'PYTHONPATH': backendDir,
+            'PYTHONUNBUFFERED': '1',
+          },
+          mode: ProcessStartMode.normal,
+        );
+      }
 
       _backendProcess?.stdout.transform(utf8.decoder).listen((data) {
         debugPrint('[FastAPI-stdout] $data');
       });
       _backendProcess?.stderr.transform(utf8.decoder).listen((data) {
         debugPrint('[FastAPI-stderr] $data');
+        _lastErrorMessage = data;
       });
 
       _backendProcess?.exitCode.then((code) {
@@ -133,11 +145,13 @@ class ApiService extends ChangeNotifier {
         await Future.delayed(const Duration(milliseconds: 350));
         if (await checkHealth() != null) {
           _isStartingBackend = false;
+          _lastErrorMessage = null;
           notifyListeners();
           return true;
         }
       }
     } catch (e) {
+      _lastErrorMessage = e.toString();
       debugPrint('[ApiService] Error al auto-iniciar backend: $e');
     }
 
@@ -145,6 +159,9 @@ class ApiService extends ChangeNotifier {
     notifyListeners();
     return false;
   }
+
+  String? _lastErrorMessage;
+  String? get lastErrorMessage => _lastErrorMessage;
 
   String? _resolveBackendDirectory() {
     final exeDir = File(Platform.resolvedExecutable).parent.path;
@@ -161,7 +178,8 @@ class ApiService extends ChangeNotifier {
 
     for (final c in candidates) {
       final script = File('$c/api_server.py');
-      if (script.existsSync()) return Directory(c).absolute.path;
+      final exe = File('$c/api_server.exe');
+      if (script.existsSync() || exe.existsSync()) return Directory(c).absolute.path;
     }
     return null;
   }

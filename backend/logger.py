@@ -157,7 +157,7 @@ def get_logger(
     # File handler (guarda absolutamente TODOS los logs DEBUG/INFO/WARN/ERROR en archivo)
     if to_file:
         try:
-            project_dir = os.path.dirname(os.path.abspath(__file__))
+            project_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
             full_log_dir = os.path.join(project_dir, safe_log_dir)
             os.makedirs(full_log_dir, exist_ok=True)
 

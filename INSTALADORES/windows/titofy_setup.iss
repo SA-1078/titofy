@@ -16,6 +16,8 @@ AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
 DefaultDirName={autopf}\{#MyAppName}
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
 DisableProgramGroupPage=yes
 DisableWelcomePage=no
 LicenseFile=..\..\LICENSE
@@ -24,6 +26,7 @@ InfoAfterFile=info_final.txt
 OutputDir=.
 OutputBaseFilename=Titofy-Setup-v1.0.0
 SetupIconFile=..\..\desktop\windows\runner\resources\app_icon.ico
+UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -42,7 +45,7 @@ Source: "..\..\desktop\build\windows\x64\runner\Release\desktop.exe"; DestDir: "
 ; Resto de archivos del bundle (DLLs, data, plugins)
 Source: "..\..\desktop\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "desktop.exe"
 ; Backend de IA Python (excluye entornos virtuales o caches de desarrollo)
-Source: "..\..\backend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".venv,venv,__pycache__,*.pyc,logs\*,data\*"
+Source: "..\..\backend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".venv,venv,__pycache__,*.pyc,logs\*,data\*,dist,build,*.spec"
 
 [Icons]
 Name: "{autoprograms}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"

@@ -12,6 +12,7 @@ Uso:
 """
 
 import os
+import sys
 import yaml
 
 
@@ -82,7 +83,8 @@ def get_config(config_path: str | None = None) -> dict:
     Si config.yaml no existe, retorna los defaults puros.
     """
     if config_path is None:
-        config_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
+        base_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+        config_path = os.path.join(base_dir, "config.yaml")
 
 
     if os.path.exists(config_path):
