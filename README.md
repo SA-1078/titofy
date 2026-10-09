@@ -219,9 +219,9 @@ Opciones principales:
 
 | Modelo | Parámetros | VRAM / RAM | Tiempo en GPU (pista 3.5 min) | Tiempo en CPU (int8) |
 | :--- | :---: | :---: | :---: | :---: |
-| **`base`** | 74M | ~1 GB | ~1-2s | ~10s |
-| **`small`** | 244M | ~2 GB | ~2-4s | ~20s |
-| **`turbo`** | 809M | ~4 GB | ~3-5s | ~30s |
+| **`base`** | 74M | ~1 GB | ~1-2 segundos | ~10-15 segundos |
+| **`small`** | 244M | ~2 GB | ~2-4 segundos | ~20-25 segundos |
+| **`turbo`** | 809M | ~4 GB | ~3-5 segundos | ~30-40 segundos |
 
 ---
 
