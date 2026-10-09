@@ -50,9 +50,11 @@ class LyricLine:
     words: list[LyricWord] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
+        sec = round(self.start, 3) if self.start is not None else None
         return {
             "text": self.text,
-            "start": round(self.start, 3) if self.start is not None else None,
+            "start": sec,
+            "time": sec if sec is not None else 0.0,  # Campo dual para garantizar compatibilidad con Flutter
             "end": round(self.end, 3) if self.end is not None else None,
             "words": [w.to_dict() for w in self.words] if self.words else [],
         }
@@ -61,9 +63,10 @@ class LyricLine:
     def from_dict(cls, d: dict[str, Any]) -> LyricLine:
         words_data = d.get("words", [])
         words = [LyricWord.from_dict(w) for w in words_data] if words_data else []
+        raw_start = d.get("start") if d.get("start") is not None else d.get("time")
         return cls(
             text=str(d.get("text", "")),
-            start=float(d["start"]) if d.get("start") is not None else None,
+            start=float(raw_start) if raw_start is not None else None,
             end=float(d["end"]) if d.get("end") is not None else None,
             words=words,
         )
@@ -84,8 +87,11 @@ class LyricData:
 
     @property
     def is_synced(self) -> bool:
-        """Indica si la letra contiene timestamps válidos."""
-        return bool(self.lines) and any(l.start is not None for l in self.lines)
+        """Indica si la letra contiene timestamps válidos y sincronizados en el tiempo."""
+        if not self.lines:
+            return False
+        # Para considerarse sincronizada, debe haber al menos una línea con timestamp mayor a 0
+        return any(l.start is not None and l.start > 0.0 for l in self.lines)
 
     def get_plain_text(self) -> str:
         """Retorna la letra en formato texto plano."""

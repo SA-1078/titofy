@@ -1,19 +1,69 @@
+# Dependencias y entornos virtuales
 node_modules/
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Variables de entorno y secretos
 .env
+.env.*
+!.env.example
+
+# Flutter y compilación
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+build/
+desktop/build/
+
+# Archivos de audio y letras
 *.mp3
 *.mp4
 *.wav
 *.m4a
+*.flac
+*.ogg
+*.aac
+*.opus
 *.lrc
+**/*.lrc
 lrc/
+**/lrc/
 cli/lrc/
+backend/lrc/
+_temp_lyrics.txt
+
+# Bases de datos y logs
 *.db
 *.sqlite
 *.sqlite3
-__pycache__/
-bin/
+*.log
 logs/
-_temp_lyrics.txt
-.venv/
-venv/
-a.txt
+**/logs/
+backend/logs/
+
+# Instaladores compilados y ejecutables locales
+bin/
+*.exe
+INSTALADORES/windows/Titofy-Setup-*.exe
+INSTALADORES/windows/Output/
+
+# Archivos temporales del sistema
+.DS_Store
+Thumbs.db
+a.txt
+*.tmp
+*.bak
+
+# Documentación interna de desarrollo
+*README_DEV*.md
+INSTALADORES/README_DEV.md
+
+# Capturas de pantalla y medios locales
+UI_titofy.jpg
+UI_titofy_3.jpg
+Captura*.png

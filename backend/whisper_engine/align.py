@@ -25,82 +25,153 @@ import re
 log = get_logger("whisper.align")
 
 
+def _safe_print(*args: typing.Any, **kwargs: typing.Any) -> None:
+    try:
+        print(*args, **kwargs)
+    except (BrokenPipeError, OSError):
+        pass
+
+
 def _clean_token(token: str) -> str:
     """Normaliza una palabra para matching ignorando signos de puntuación y mayúsculas."""
     return re.sub(r"[^\w]", "", token.lower())
 
 
-def map_words_to_original_lines(original_lines: list[str], words: list[dict[str, typing.Any]]) -> list[str]:
+def _get_w_val(w: typing.Any, key: str, default: typing.Any = None) -> typing.Any:
+    """Extrae valores de forma segura ya sea un dict o un objeto WordTiming de stable_whisper."""
+    if isinstance(w, dict):
+        return w.get(key, default)
+    return getattr(w, key, default)
+
+
+def map_words_to_original_lines(original_lines: list[str], words: list[typing.Any]) -> list[str]:
     """
     Asigna a cada línea original de la letra su marca de tiempo exacta basándose
-    en los timestamps de las palabras reconocidas por Whisper.
+    en los timestamps de las palabras reconocidas acústicamente por Whisper.
     Preserva intacta la estructura de estrofas y versos del texto original,
     manejando limpiamente intros instrumentales y diálogos de videos musicales.
     """
     mapped_lrc: list[str] = []
     total_words = len(words)
+    if not words or not original_lines:
+        return mapped_lrc
 
-    # 1. Detectar el inicio de la primera actividad vocal genuina
-    first_real_vocal_ts = 0.0
-    for i in range(total_words):
-        w = words[i]
-        dur = float(w.get("end", 0.0)) - float(w.get("start", 0.0))
-        prob = float(w.get("probability", 0.0))
-        if dur > 0.08 and prob > 0.20:
-            first_real_vocal_ts = float(w.get("start", 0.0))
-            break
-
-    # Si hay una introducción instrumental o diálogo > 8s, insertar marcador limpio de (intro)
-    if first_real_vocal_ts >= 8.0:
-        mapped_lrc.append("[00:00.00] (intro)")
-
-    w_idx = 0
-
+    # 1. Recolectar versos y tokens
+    valid_lines: list[str] = []
+    line_token_list: list[list[str]] = []
     for line in original_lines:
         line_strip = line.strip()
         if not line_strip:
             continue
+        tokens = [_clean_token(t) for t in line_strip.split() if _clean_token(t)]
+        if not tokens:
+            continue
+        valid_lines.append(line_strip)
+        line_token_list.append(tokens)
 
-        line_tokens = [_clean_token(t) for t in line_strip.split() if _clean_token(t)]
-        if not line_tokens:
+    if not valid_lines:
+        return mapped_lrc
+
+    # Extraer tokens limpios de las palabras reconocidas y sus timestamps
+    clean_words: list[str] = [_clean_token(str(_get_w_val(w, "word", ""))) for w in words]
+    word_starts: list[float] = [float(_get_w_val(w, "start", 0.0)) for w in words]
+
+    line_timestamps: list[float | None] = [None] * len(valid_lines)
+    w_cursor = 0
+
+    # 2. Emparejar cada verso secuencialmente contra las palabras reconocidas por Whisper
+    for line_idx, tokens in enumerate(line_token_list):
+        if not tokens:
             continue
 
-        start_ts: float | None = None
-        matched_tokens = 0
+        best_match_start: float | None = None
+        best_match_end_idx: int = -1
+        best_match_score = 0.0
 
-        while w_idx < total_words and matched_tokens < len(line_tokens):
-            w_obj = words[w_idx]
-            w_token = _clean_token(w_obj.get("word", ""))
+        # Ventana de búsqueda hacia adelante generosa (hasta 250 palabras)
+        search_window_end = min(total_words, w_cursor + 250)
+        t_len = len(tokens)
 
-            if w_token == line_tokens[matched_tokens]:
-                if start_ts is None:
-                    raw_ts = float(w_obj.get("start", 0.0))
-                    w_prob = float(w_obj.get("probability", 0.0))
-                    w_dur = float(w_obj.get("end", 0.0)) - raw_ts
-                    if raw_ts >= first_real_vocal_ts or (w_prob > 0.35 and w_dur > 0.10):
-                        start_ts = raw_ts
-                    else:
-                        start_ts = first_real_vocal_ts
-                matched_tokens += 1
-            w_idx += 1
+        for s_idx in range(w_cursor, max(w_cursor + 1, search_window_end - t_len + 1)):
+            matches = 0
+            for t_offset, token in enumerate(tokens):
+                check_idx = s_idx + t_offset
+                if check_idx < total_words and clean_words[check_idx] == token:
+                    matches += 1
 
-        if start_ts is None:
-            if w_idx < total_words:
-                start_ts = max(float(words[w_idx].get("start", 0.0)), first_real_vocal_ts)
-            elif total_words > 0:
-                start_ts = max(float(words[-1].get("start", 0.0)), first_real_vocal_ts)
-            else:
-                start_ts = first_real_vocal_ts
+            score = matches / t_len
+            min_score = 0.4 if t_len >= 3 else 0.8
+            if score >= min_score and score > best_match_score:
+                best_match_score = score
+                best_match_start = word_starts[s_idx]
+                best_match_end_idx = min(total_words - 1, s_idx + t_len)
+                if score >= 0.95:
+                    break
 
-        ts_str = to_lrc_timestamp(start_ts)
-        mapped_lrc.append(f"[{ts_str}]{line_strip}")
+        if best_match_start is not None and best_match_score >= 0.4:
+            line_timestamps[line_idx] = best_match_start
+            w_cursor = max(w_cursor, best_match_end_idx)
+
+    # 3. Interpolar marcas de tiempo
+    anchors = [(idx, ts) for idx, ts in enumerate(line_timestamps) if ts is not None]
+    resolved_ts: list[float] = [0.0] * len(valid_lines)
+
+    if not anchors:
+        for i in range(len(valid_lines)):
+            resolved_ts[i] = i * 2.5
+    else:
+        first_anchor_idx, first_anchor_ts = anchors[0]
+
+        # Rellenar antes de la primera ancla (sin retroceder a 0 si hay intro)
+        resolved_ts[first_anchor_idx] = first_anchor_ts
+        if first_anchor_idx > 0:
+            step = 2.0
+            for i in range(first_anchor_idx - 1, -1, -1):
+                resolved_ts[i] = max(first_anchor_ts - ((first_anchor_idx - i) * step), 0.0)
+
+        # Rellenar entre anclas consecutivas
+        for a_curr, a_next in zip(anchors[:-1], anchors[1:]):
+            idx_a, ts_a = a_curr
+            idx_b, ts_b = a_next
+            resolved_ts[idx_a] = ts_a
+            resolved_ts[idx_b] = ts_b
+            count = idx_b - idx_a - 1
+            if count > 0:
+                step = (ts_b - ts_a) / (count + 1)
+                for step_i, i in enumerate(range(idx_a + 1, idx_b), 1):
+                    resolved_ts[i] = ts_a + (step * step_i)
+
+        # Rellenar después de la última ancla
+        last_idx, last_ts = anchors[-1]
+        resolved_ts[last_idx] = last_ts
+        for i in range(last_idx + 1, len(valid_lines)):
+            resolved_ts[i] = resolved_ts[i - 1] + 2.5
+
+    # 4. Si la primera voz empieza tarde (intro instrumental/videoclip > 6s), insertar marcador (intro)
+    earliest_vocal = resolved_ts[0] if resolved_ts else 0.0
+    if earliest_vocal >= 6.0:
+        mapped_lrc.append("[00:00.00](intro)")
+
+    # 5. Asegurar monotonicidad estricta
+    for i in range(1, len(resolved_ts)):
+        if resolved_ts[i] <= resolved_ts[i - 1]:
+            resolved_ts[i] = resolved_ts[i - 1] + 0.8
+
+    for line_text, ts in zip(valid_lines, resolved_ts):
+        ts_str = to_lrc_timestamp(ts)
+        mapped_lrc.append(f"[{ts_str}]{line_text}")
 
     return mapped_lrc
 
 
 
-def align_lyrics(
+def _align_with_model(model_instance: typing.Any, audio: str, text: str, lang: str) -> typing.Any:
+    """Invoca el método align de stable_whisper de forma segura y tipada para linters estáticos."""
+    align_func: typing.Callable[..., typing.Any] = getattr(model_instance, "align")
+    return align_func(audio, text, language=lang)
 
+
+def align_lyrics(
     audio_path: str,
     lyrics_text: str,
     output_path: str,
@@ -110,6 +181,14 @@ def align_lyrics(
     """
     Toma un audio + letra existente y genera un .lrc perfectamente sincronizado.
     """
+    if not os.path.exists(audio_path):
+        raise FileNotFoundError(f"Audio no encontrado: {audio_path}")
+    if not lyrics_text or not lyrics_text.strip():
+        raise ValueError("Texto de letra vacío para alineación")
+
+    output_path = os.path.abspath(output_path)
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
     setup_cuda_dlls()
     cfg = get_config()
 
@@ -119,67 +198,98 @@ def align_lyrics(
     term_width = shutil.get_terminal_size((100, 20)).columns
     inner_width = min(max(term_width - 6, 60), 140)
 
-    print()
-    print("  ╭" + "─" * (inner_width - 2) + "╮")
-    print("  │  🎯 FORCED ALIGNMENT — SINCRONIZACIÓN CON LETRA EXISTENTE".ljust(inner_width, ' ') + "│")
-    print("  ╰" + "─" * (inner_width - 2) + "╯")
-    print()
-    print(f"  💿 Archivo  : {basename}")
+    _safe_print()
+    _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+    _safe_print("  │  🎯 FORCED ALIGNMENT — SINCRONIZACIÓN CON LETRA EXISTENTE".ljust(inner_width, ' ') + "│")
+    _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+    _safe_print()
+    _safe_print(f"  💿 Archivo  : {basename}")
 
     duration = validate_audio_file(audio_path)
     size_mb = os.path.getsize(audio_path) / (1024 * 1024)
     line_count = len([l for l in lyrics_text.strip().split("\n") if l.strip()])
 
-    print(f"  📦 Tamaño   : {size_mb:.2f} MB")
+    _safe_print(f"  📦 Tamaño   : {size_mb:.2f} MB")
     if duration:
-        print(f"  ⏱️ Duración : {duration:.2f} s")
-    print(f"  🤖 Modelo   : {model_name} (alineación)")
-    print(f"  🌐 Idioma   : {language}")
-    print(f"  📝 Líneas   : {line_count} líneas de letra")
-    print(f"  📂 Salida   : {lrc_name}")
-    print("  " + "─" * inner_width)
-    print()
+        _safe_print(f"  ⏱️ Duración : {duration:.2f} s")
+    _safe_print(f"  🤖 Modelo   : {model_name} (alineación)")
+    _safe_print(f"  🌐 Idioma   : {language}")
+    _safe_print(f"  📝 Líneas   : {line_count} líneas de letra")
+    _safe_print(f"  📂 Salida   : {lrc_name}")
+    _safe_print("  " + "─" * inner_width)
+    _safe_print()
 
     device, device_name = detect_device()
     if device == "cuda":
-        print(f"  🚀 GPU       : {device_name}")
+        _safe_print(f"  🚀 GPU       : {device_name}")
     else:
-        print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
+        try:
+            print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
+        except Exception:
+            pass
 
     wcfg = cfg.get("whisper", {})
     compute_type = wcfg.get("compute_type", "auto")
 
     log.info(f"Cargando modelo '{model_name}' en {device} para alineación...")
-    import stable_whisper
-    model: typing.Any = stable_whisper.load_model(model_name, device=device)
-
-    log.info("Ejecutando forced alignment (stable-ts model.align)...")
-    print("  🔄 Alineando letra con audio...")
-    print("     ℹ️  Esto es más rápido que transcribir desde cero.\n")
-
     try:
-        result = model.align(audio_path, lyrics_text, language=language)
-    except Exception as e:
-        log.error(f"Fallo en forced alignment: {e}")
-        print(f"\n  ❌ Error durante la alineación: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    if cfg.get("whisper", {}).get("adjust_by_silence", True):
+        model, _ = load_whisper_model(model_name, device=device, compute_type=compute_type)
+    except Exception as exc:
+        log.warning(f"Fallo al cargar faster-whisper ({exc}). Intentando con stable_whisper directo...")
         try:
-            result.adjust_by_silence(audio_path, q_levels=20, k_size=5)
-            log.info("Realineamiento por silencios aplicado")
-            print("  ✅ Realineamiento por silencios aplicado")
+            import stable_whisper
+            model = stable_whisper.load_model(model_name, device=device)
+        except Exception as exc_sw:
+            raise RuntimeError(f"Error al cargar modelo de alineación: {exc_sw}")
+
+    log.info("Analizando acústica del audio con Whisper para capturar inicio real del canto...")
+    _safe_print("  🎙️ Escuchando audio y detectando inicio real de la voz...")
+
+    result: typing.Any = None
+    try:
+        # 1. Transcripción acústica real: identifica exactamente en qué segundo comienza el canto
+        result = model.transcribe(audio_path, language=language)
+    except Exception as e_trans:
+        log.warning(f"Transcripción directa con {device} falló ({e_trans}). Intentando alineación forzada clásica...")
+        try:
+            result = _align_with_model(model, audio_path, lyrics_text, language)
         except Exception as e:
-            log.warning(f"Realineamiento por silencios omitido: {e}")
+            if device == "cuda":
+                log.warning(f"Fallo en alineación GPU ({e}). Reintentando con CPU...")
+                try:
+                    model_cpu, _ = load_whisper_model(model_name, device="cpu", compute_type="int8")
+                    result = _align_with_model(model_cpu, audio_path, lyrics_text, language)
+                except Exception as e_cpu:
+                    log.error(f"Fallo definitivo en CPU: {e_cpu}")
+                    raise RuntimeError(f"Fallo en alineación con audio: {e_cpu}")
+            else:
+                log.error(f"Fallo en alineación: {e}")
+                raise RuntimeError(f"Fallo en alineación con audio: {e}")
 
     result_dict = result.to_dict()
     segments = result_dict.get("segments", [])
 
-    # Extraer todas las palabras con timestamps
+    # Extraer todas las palabras reconocidas con timestamps reales
     all_words: list[dict[str, typing.Any]] = []
     for seg in segments:
-        for w in seg.get("words", []):
-            all_words.append(w)
+        seg_words = seg.get("words", [])
+        if seg_words:
+            for w in seg_words:
+                all_words.append(w)
+        else:
+            seg_text = seg.get("text", "").strip()
+            s_start = float(seg.get("start", 0.0))
+            s_end = float(seg.get("end", s_start + 2.0))
+            tokens = seg_text.split()
+            if tokens:
+                step = (s_end - s_start) / max(len(tokens), 1)
+                for idx, t in enumerate(tokens):
+                    all_words.append({
+                        "word": t,
+                        "start": s_start + (step * idx),
+                        "end": s_start + (step * (idx + 1)),
+                        "probability": 0.9,
+                    })
 
     title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
@@ -211,13 +321,13 @@ def align_lyrics(
     lyric_count = len([l for l in lrc_lines if l.startswith("[") and not l.startswith("[ti") and not l.startswith("[by")])
     log.info(f"Alineación completada: {lyric_count} líneas sincronizadas → {lrc_name}")
 
-    print()
-    print("  ╭" + "─" * (inner_width - 2) + "╮")
-    print("  │  🎉 ALINEACIÓN COMPLETADA SATISFACTORIAMENTE".ljust(inner_width, ' ') + "│")
-    print("  ╰" + "─" * (inner_width - 2) + "╯")
-    print(f"   📂 Archivo : {lrc_name}")
-    print(f"   🎼 Líneas  : {lyric_count} líneas sincronizadas (estructura original respetada)")
-    print(f"   ⚡ Método  : Forced Alignment con mapeo de estrofas\n")
+    _safe_print()
+    _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+    _safe_print("  │  🎉 ALINEACIÓN COMPLETADA SATISFACTORIAMENTE".ljust(inner_width, ' ') + "│")
+    _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+    _safe_print(f"   📂 Archivo : {lrc_name}")
+    _safe_print(f"   🎼 Líneas  : {lyric_count} líneas sincronizadas (estructura original respetada)")
+    _safe_print(f"   ⚡ Método  : Forced Alignment con mapeo de estrofas\n")
 
 
 

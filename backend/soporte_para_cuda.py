@@ -54,17 +54,25 @@ def setup_cuda_dlls():
 
 def detect_device() -> tuple[str, str]:
     """
-    Detecta automáticamente si hay GPU CUDA disponible.
+    Detecta automáticamente si hay GPU CUDA disponible y FUNCIONAL.
+    Verifica que el driver responda adecuadamente. Si el usuario cambió o tiene
+    problemas con drivers NVIDIA, hace fallback transparente y seguro a CPU
+    sin detener la aplicación ni requerir cambios manuales.
     Returns: (device, device_name)
-      - ("cuda", "NVIDIA GeForce RTX ...") si hay GPU
-      - ("cpu", "CPU") si no hay GPU
+      - ("cuda", "NVIDIA GeForce RTX ...") si GPU y driver están operativos
+      - ("cpu", "CPU") si no hay GPU o si el driver falló
     """
     try:
         import torch
         if torch.cuda.is_available():
-            name = torch.cuda.get_device_name(0)
-            return "cuda", name
+            torch.cuda.init()
+            if torch.cuda.device_count() > 0:
+                # Verificación activa con tensor pequeño para garantizar que el driver responde
+                _ = torch.zeros(1, device="cuda")
+                name = torch.cuda.get_device_name(0)
+                return "cuda", name
     except Exception as exc:
-        print(f"\033[33m  ⚠️  CUDA no se pudo inicializar correctamente: {exc}\033[0m")
-        print("\033[33m     Se usara CPU para continuar sin detener el programa.\033[0m")
+        print(f"\033[33m  ⚠️  CUDA/GPU no disponible o fallo en driver ({exc}).\033[0m")
+        print("\033[33m     Activando fallback automático a CPU para continuar sin errores.\033[0m")
     return "cpu", "CPU"
+

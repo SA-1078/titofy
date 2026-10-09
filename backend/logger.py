@@ -23,8 +23,48 @@ from datetime import datetime
 _configured_loggers = set()
 
 
+class SafeStream:
+    """Envuelve sys.stdout / sys.stderr para absorber BrokenPipeError y OSError en procesos huérfanos o cerrados."""
+    def __init__(self, target):
+        self._target = target
+
+    def write(self, s):
+        try:
+            return self._target.write(s)
+        except (BrokenPipeError, OSError):
+            return len(s) if hasattr(s, "__len__") else 0
+
+    def flush(self):
+        try:
+            return self._target.flush()
+        except (BrokenPipeError, OSError):
+            pass
+
+    def isatty(self):
+        try:
+            return self._target.isatty()
+        except Exception:
+            return False
+
+    def fileno(self):
+        try:
+            return self._target.fileno()
+        except Exception:
+            raise OSError("No fileno on safe stream")
+
+    def __getattr__(self, name):
+        return getattr(self._target, name)
+
+
+# Proteger streams estándar globalmente
+if not isinstance(sys.stdout, SafeStream):
+    sys.stdout = SafeStream(sys.stdout)
+if not isinstance(sys.stderr, SafeStream):
+    sys.stderr = SafeStream(sys.stderr)
+
+
 class SafeStreamHandler(logging.StreamHandler):
-    """Handler que no crashea con emojis en Windows cp1252."""
+    """Handler que no crashea con emojis en Windows cp1252 ni con BrokenPipe en Linux."""
 
     def emit(self, record):
         try:
@@ -32,12 +72,19 @@ class SafeStreamHandler(logging.StreamHandler):
             stream = self.stream
             try:
                 stream.write(msg + self.terminator)
+            except (BrokenPipeError, OSError):
+                return
             except UnicodeEncodeError:
-                # Fallback: reemplazar caracteres no soportados
-                stream.write(msg.encode("ascii", errors="replace").decode("ascii") + self.terminator)
-            self.flush()
+                try:
+                    stream.write(msg.encode("ascii", errors="replace").decode("ascii") + self.terminator)
+                except (BrokenPipeError, OSError):
+                    return
+            try:
+                self.flush()
+            except (BrokenPipeError, OSError):
+                pass
         except Exception:
-            self.handleError(record)
+            pass  # Nunca propagar error de logging en consola
 
 
 def get_logger(
@@ -70,11 +117,15 @@ def get_logger(
             cfg = {}
 
         if level is None:
-            level = cfg.get("level", "INFO")
+            level = cfg.get("level") or "INFO"
         if to_file is None:
-            to_file = cfg.get("to_file", True)
+            to_file = bool(cfg.get("to_file", True))
         if log_dir is None:
-            log_dir = cfg.get("log_dir", "logs")
+            log_dir = cfg.get("log_dir") or "logs"
+
+    # Garantizar strings válidos
+    safe_level = (level or "INFO").strip()
+    safe_log_dir = (log_dir or "logs").strip()
 
     # Mapear nivel
     level_map = {
@@ -84,7 +135,7 @@ def get_logger(
         "WARNING": logging.WARNING,
         "ERROR": logging.ERROR,
     }
-    log_level = level_map.get(level.upper(), logging.INFO)
+    log_level = level_map.get(safe_level.upper(), logging.INFO)
     logger.setLevel(log_level)
 
     # Formato rico
@@ -106,8 +157,8 @@ def get_logger(
     # File handler (guarda absolutamente TODOS los logs DEBUG/INFO/WARN/ERROR en archivo)
     if to_file:
         try:
-            project_dir = os.path.dirname(os.path.abspath(__file__))
-            full_log_dir = os.path.join(project_dir, log_dir)
+            project_dir = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.path.dirname(os.path.abspath(__file__))
+            full_log_dir = os.path.join(project_dir, safe_log_dir)
             os.makedirs(full_log_dir, exist_ok=True)
 
             log_file = os.path.join(full_log_dir, f"titofy-{datetime.now().strftime('%Y-%m-%d')}.log")

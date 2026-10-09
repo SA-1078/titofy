@@ -7,6 +7,16 @@ lyrics.providers — Proveedores de Letras Online
 
 from .base import LyricsProvider
 from .lrclib import LrclibProvider
+from .netease import NeteaseProvider
+from .lyrist import LyristProvider
+from .genius import GeniusProvider
 from .lyrics_ovh import LyricsOvhProvider
 
-__all__ = ["LyricsProvider", "LrclibProvider", "LyricsOvhProvider"]
+__all__ = [
+    "LyricsProvider",
+    "LrclibProvider",
+    "NeteaseProvider",
+    "LyristProvider",
+    "GeniusProvider",
+    "LyricsOvhProvider",
+]

@@ -12,17 +12,23 @@ import unicodedata
 
 # Patrones de ruido comunes en títulos de canciones / nombres de archivo
 NOISE_PATTERNS = [
-    r"\((?:official\s*(?:video|audio|music\s*video|lyric\s*video)|video\s*oficial|audio\s*oficial|letra|lyrics)\)",
-    r"\[(?:official\s*(?:video|audio|music\s*video|lyric\s*video)|video\s*oficial|audio\s*oficial|letra|lyrics)\]",
-    r"\((?:remastered|remaster|remasterizado|anniversary\s*edition|deluxe\s*edition|bonus\s*track)\s*\d*\)",
-    r"\[(?:remastered|remaster|remasterizado|anniversary\s*edition|deluxe\s*edition|bonus\s*track)\s*\d*\]",
-    r"\((?:live|en\s*vivo|acoustic|en\s*directo|acustico)\s*\d*\)",
-    r"\[(?:live|en\s*vivo|acoustic|en\s*directo|acustico)\s*\d*\]",
+    r"\((?:official\s*(?:video|audio|music\s*video|lyric\s*video|visualizer)|video\s*oficial|audio\s*oficial|video\s*con\s*letra|letra\s*oficial|visualizer|letra|lyrics)\)",
+    r"\[(?:official\s*(?:video|audio|music\s*video|lyric\s*video|visualizer)|video\s*oficial|audio\s*oficial|video\s*con\s*letra|letra\s*oficial|visualizer|letra|lyrics)\]",
+    r"【(?:official\s*(?:video|audio|music\s*video|lyric\s*video)|video\s*oficial|mv|pv|letra)】",
+    r"「(?:official\s*(?:video|audio|music\s*video|lyric\s*video)|video\s*oficial|mv|pv|letra)」",
+    r"\((?:remastered|remaster|remasterizado|anniversary\s*edition|deluxe\s*edition|bonus\s*track|\d{4}\s*remaster)\s*\d*\)",
+    r"\[(?:remastered|remaster|remasterizado|anniversary\s*edition|deluxe\s*edition|bonus\s*track|\d{4}\s*remaster)\s*\d*\]",
+    r"\((?:live|en\s*vivo|acoustic|en\s*directo|acustico|acoustic\s*version|live\s*at\s*[^()\[\]]+)\s*\d*\)",
+    r"\[(?:live|en\s*vivo|acoustic|en\s*directo|acustico|acoustic\s*version|live\s*at\s*[^()\[\]]+)\s*\d*\]",
+    r"\((?:slowed\s*(?:\+|and|&)\s*reverb|sped\s*up|speed\s*up|nightcore)\)",
+    r"\[(?:slowed\s*(?:\+|and|&)\s*reverb|sped\s*up|speed\s*up|nightcore)\]",
+    r"\((?:prod\.?|produced\s*by)\s+[^()\[\]]+\)",
+    r"\[(?:prod\.?|produced\s*by)\s+[^()\[\]]+\]",
     r"[\(\[](?:mp3|flac|wav|m4a|aac|ogg|wma)[_\-\s]*\d+k?\w*[\)\]]",
     r"[\(\[]\d+\s*k(?:bps)?[\)\]]",
     r"[\(\[](?:4k|hd|hq|1080p|720p|480p|360p|audio|video)[_\-\s\w]*[\)\]]",
     r"[\(\[]\d{3,4}p[_\-\s\w]*[\)\]]",
-    r"-\s*(?:single\s*version|radio\s*edit|album\s*version|original\s*mix)",
+    r"-\s*(?:single\s*version|radio\s*edit|album\s*version|original\s*mix|extended\s*mix|deluxe|explicit)",
 ]
 
 
@@ -33,18 +39,22 @@ FEAT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+PIPE_CHANNEL_PATTERN = re.compile(r"\s*[|/]{1,2}\s*[^|/]+$", re.IGNORECASE)
 TRACK_NUM_PATTERN = re.compile(r"^\s*\d{1,3}\s*[-._\s]\s*")
 
 
 def clean_query(text: str | None) -> str:
     """
     Limpia un texto (título o artista) removiendo sufijos publicitarios,
-    etiquetas de remaster, live, video oficial, tasas de bitrate (MP3_160K) y features.
+    etiquetas de remaster, live, video oficial, tasas de bitrate (MP3_160K), canal y features.
     """
     if not text:
         return ""
 
-    cleaned = str(text)
+    cleaned = text
+
+    # Remover sufijos de canal de YouTube (ej: "Song Name | Artist Channel")
+    cleaned = PIPE_CHANNEL_PATTERN.sub("", cleaned)
 
     # Remover patrones de ruido
     for pattern in COMPILED_NOISE_PATTERNS:
@@ -57,7 +67,10 @@ def clean_query(text: str | None) -> str:
     cleaned = re.sub(r"(?<=\w)_(?=\w)", " ", cleaned)
 
     # Limpiar paréntesis o corchetes vacíos resultantes
-    cleaned = re.sub(r"[\(\[]\s*[\)\]]", "", cleaned)
+    cleaned = re.sub(r"[\(\[【「]\s*[\)\]】」]", "", cleaned)
+
+    # Limpiar guiones o barras sobrantes al final
+    cleaned = re.sub(r"[\s\-_/|]+$", "", cleaned)
 
     # Colapsar espacios múltiples y recortar
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
@@ -101,7 +114,7 @@ def round_duration(duration: float | int | None) -> int | None:
         val = float(duration)
         if val <= 0:
             return None
-        return int(round(val))
+        return round(val)
     except (ValueError, TypeError):
         return None
 
@@ -196,4 +209,84 @@ def generate_search_variations(artist: str | None, title: str) -> list[dict[str,
         add_var("", clean_t, clean_t)
 
     return variations
+
+
+def is_artist_compatible(expected_artist: str | None, candidate_artist: str | None) -> bool:
+    """
+    Verifica con alta precisión si el artista candidato es afín al artista solicitado.
+    Evita falsos positivos donde buscar 'X Artista' devuelve canciones de artistas no relacionados.
+    """
+    if not expected_artist or not expected_artist.strip():
+        return True
+
+    clean_exp = clean_query(expected_artist)
+    if not clean_exp or clean_exp.lower() in ("desconocido", "unknown", "varios", "various"):
+        return True
+
+    if not candidate_artist or not candidate_artist.strip():
+        return False
+
+    norm_exp = normalize_for_match(clean_exp)
+    norm_cand = normalize_for_match(candidate_artist)
+
+    if not norm_exp:
+        return True
+    if not norm_cand:
+        return False
+
+    # 1. Coincidencia idéntica o contención directa
+    if norm_exp in norm_cand or norm_cand in norm_exp:
+        return True
+
+    # 2. Token overlap (subconjuntos de palabras del artista)
+    tokens_exp = [t for t in norm_exp.split() if len(t) > 2]
+    tokens_cand = set(norm_cand.split())
+    if tokens_exp:
+        matches = sum(1 for t in tokens_exp if t in tokens_cand)
+        if matches >= max(1, len(tokens_exp) // 2):
+            return True
+
+    # 3. Similitud difusa
+    try:
+        from rapidfuzz import fuzz
+        ratio = max(
+            fuzz.ratio(norm_exp, norm_cand),
+            fuzz.token_set_ratio(norm_exp, norm_cand),
+            fuzz.partial_ratio(norm_exp, norm_cand),
+        )
+        if ratio >= 55.0:
+            return True
+    except ImportError:
+        pass
+
+    return False
+
+
+def is_lyrics_script_compatible(title_or_artist: str, lyrics_text: str) -> bool:
+    """
+    Comprueba que el alfabeto de la letra devuelta no sea incompatible con la consulta.
+    Si el título/artista está en alfabeto latino (ej: español/inglés), pero la letra
+    devuelta está llena de caracteres cirílicos (ruso), hanzi (chino), hangul (coreano), etc.,
+    la letra es un falso positivo y debe rechazarse.
+    """
+    if not lyrics_text or not lyrics_text.strip():
+        return False
+
+    cyrillic_chars = len(re.findall(r"[\u0400-\u04FF]", lyrics_text))
+    cjk_chars = len(re.findall(r"[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", lyrics_text))
+    total_alpha = len(re.findall(r"[a-zA-Z\u0400-\u04FF\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", lyrics_text))
+
+    if total_alpha > 20:
+        query_has_cyrillic = bool(re.search(r"[\u0400-\u04FF]", title_or_artist or ""))
+        query_has_cjk = bool(re.search(r"[\u4E00-\u9FFF\u3040-\u30FF\uAC00-\uD7AF]", title_or_artist or ""))
+
+        # Si la consulta no tiene cirílico pero >15% de las letras son cirílicas -> Incompatible
+        if not query_has_cyrillic and (cyrillic_chars / total_alpha) > 0.15:
+            return False
+
+        # Si la consulta no tiene caracteres asiáticos pero >25% son CJK -> Incompatible
+        if not query_has_cjk and (cjk_chars / total_alpha) > 0.25:
+            return False
+
+    return True
 

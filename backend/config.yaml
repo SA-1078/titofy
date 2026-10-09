@@ -16,8 +16,7 @@ logging:
   to_file: true
 paths:
   lrc_output: lrc
-  music_folder: ''
-
+  music_folder: '/home/santiago007/Música'
 postprocess:
   loop_window: 5
   max_segment_duration: 30
@@ -40,6 +39,19 @@ whisper:
   use_large_v3_for_pro: true
   vad: false
   word_timestamps: true
+  supported_models:
+    - id: base
+      name: "Whisper Base"
+      size: "~145 MB"
+      description: "Rápido y ligero"
+    - id: small
+      name: "Whisper Small (Recomendado)"
+      size: "~465 MB"
+      description: "Equilibrado para la mayoría de canciones"
+    - id: turbo
+      name: "Whisper Turbo (large-v3)"
+      size: "~1.5 GB"
+      description: "Máxima precisión acústica"
 model_check:
-  last_model_check: '2026-08-24'
+  last_model_check: '2026-10-06'
   new_models_found: 'ninguno'

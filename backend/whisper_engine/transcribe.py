@@ -36,6 +36,12 @@ from whisper_engine.formatter import to_lrc_timestamp, clean_text, split_long_se
 
 log = get_logger("whisper.transcribe")
 
+def _safe_print(*args: typing.Any, **kwargs: typing.Any) -> None:
+    try:
+        print(*args, **kwargs)
+    except (BrokenPipeError, OSError):
+        pass
+
 try:
     from music_detector import classify_sections
     HAS_MUSIC_DETECTOR = True
@@ -93,43 +99,46 @@ def transcribe_audio(
     inner_width = min(max(term_width - 6, 60), 140)
 
     if verbose:
-        print()
-        print("  ╭" + "─" * (inner_width - 2) + "╮")
-        print("  │  🎵 TITOFY — TRANSCRIBIR AUDIO A LRC DE LETRAS".ljust(inner_width, ' ') + "│")
-        print("  ╰" + "─" * (inner_width - 2) + "╯")
-        print()
+        _safe_print()
+        _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+        _safe_print("  │  🎵 TITOFY — TRANSCRIBIR AUDIO A LRC DE LETRAS".ljust(inner_width, ' ') + "│")
+        _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+        _safe_print()
 
     duration = validate_audio_file(audio_path)
     lang_display = "auto (detectar)" if language == "auto" else language
     model_display = f"{model_name} (turbo SOTA)" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
-    if verbose:
-        print(f"  Modelo seleccionado : {model_display}")
-        print(f"  Archivo             : {basename}")
-        if duration:
-            dur_m = int(duration // 60)
-            dur_s = int(duration % 60)
-            print(f"  Duración            : {dur_m}:{dur_s:02d}")
-        print(f"  Idioma              : {lang_display}")
-        print(f"  Salida              : lrc/{lrc_name}\n")
-
     device, device_name = detect_device()
 
     if verbose:
+        sep = "  │  " + "─" * (inner_width - 7) + "  │"
+        _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+        def _row(key, val):
+            line = f"  │  {key:<12}: {val}"
+            _safe_print(line.ljust(inner_width + 2) + "│")
+        _row("Modelo", model_display)
+        _row("Archivo", basename)
+        if duration:
+            dur_m = int(duration // 60)
+            dur_s = int(duration % 60)
+            _row("Duración", f"{dur_m}:{dur_s:02d}")
+        _row("Idioma", lang_display)
+        _row("Salida", f"lrc/{lrc_name}")
         if device == "cuda":
-            print(f"  🚀 GPU       : {device_name}")
-            print("  ⚡ Precisión  : FP16 (aceleración GPU)")
+            _row("GPU", device_name)
+            _row("Precisión", "FP16 · aceleración GPU")
         else:
-            print_yellow("  ⚠️  GPU CUDA no detectada; usando CPU como fallback seguro.")
+            _row("Hardware", "CPU (int8) — sin GPU CUDA")
+        _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+        _safe_print()
 
     log.info(f"Iniciando transcripción: {basename} [modelo={model_name}, lang={lang_display}, device={device}]")
-    print(f"→ Cargando modelo en {device.upper()}...")
 
     wcfg = cfg.get("whisper", {})
     compute_type = wcfg.get("compute_type", "auto")
 
     # ── Limpiar caché CUDA antes de cargar el modelo ───────────────────────
-    # Garantiza que no se reutilicen mel features ni tensores del audio anterior
     try:
         import torch
         if torch.cuda.is_available():
@@ -139,13 +148,16 @@ def transcribe_audio(
     except Exception:
         pass
 
+    if verbose:
+        _safe_print(f"  ⏳ Cargando modelo '{model_name}' en {(device or 'cpu').upper()}...")
+
     try:
         model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
     except Exception as exc:
         exc_str = str(exc)
         if "CUDA out of memory" in exc_str or "out of memory" in exc_str.lower():
             log.warning(f"CUDA Out of Memory en GPU. Conmutando a CPU como fallback: {exc}")
-            print_yellow("  ⚠️ Memoria VRAM agotada en GPU. Conmutando automáticamente a CPU (int8)...")
+            print_yellow("  ⚠️  VRAM agotada. Conmutando a CPU (int8)...")
             device = "cpu"
             model, is_faster = load_whisper_model(model_name, device="cpu", compute_type="int8")
         else:
@@ -176,8 +188,11 @@ def transcribe_audio(
         rem_s = rem_sec % 60
         time_str = f"{rem_m}:{rem_s:02d} restantes"
 
-        real_stdout.write(f"\r→ Transcribiendo  {bar}  {pct}%  ·  {time_str}   ")
-        real_stdout.flush()
+        try:
+            real_stdout.write(f"\r→ Transcribiendo  {bar}  {pct}%  ·  {time_str}   ")
+            real_stdout.flush()
+        except (BrokenPipeError, OSError):
+            pass
 
     default_lang = wcfg.get("default_language", "es")
     selected_lang = default_lang if language == "auto" else language
@@ -212,30 +227,41 @@ def transcribe_audio(
 
     orig_tqdm: typing.Any = None
     try:
-        import tqdm as _tqdm_mod
+        import tqdm as _tqdm_mod  # type: ignore
         orig_tqdm = getattr(_tqdm_mod, "tqdm", None)
         if orig_tqdm is not None:
             setattr(_tqdm_mod, "tqdm", lambda *a, **k: orig_tqdm(*a, **{**k, "disable": True}))
     except Exception:
         pass
 
+    import io
+    devnull_stream = io.StringIO()
+
     try:
+        sys.stdout = devnull_stream  # suprimir «Detected Language: ...» de stable-whisper
         model_obj: typing.Any = model
         if is_faster:
             result = model_obj.transcribe(audio_path, progress_callback=progress_callback, **transcribe_kwargs)
         else:
             result = model_obj.transcribe(audio_path, **transcribe_kwargs)
-        real_stdout.write("\r" + " " * 80 + "\r")
-        real_stdout.flush()
     except Exception as e:
-        real_stdout.write("\n")
+        sys.stdout = real_stdout
+        try:
+            real_stdout.write("\n")
+        except (BrokenPipeError, OSError):
+            pass
         log.error(f"Fallo en la transcripción: {e}")
-        print(f"\n  ❌ Error durante la transcripción: {e}", file=sys.stderr)
-        sys.exit(1)
+        raise RuntimeError(f"Error durante la transcripción: {e}")
     finally:
+        sys.stdout = real_stdout
+        try:
+            real_stdout.write("\r" + " " * 80 + "\r")
+            real_stdout.flush()
+        except (BrokenPipeError, OSError):
+            pass
         # Restaurar tqdm original
         try:
-            import tqdm as _tqdm_mod
+            import tqdm as _tqdm_mod  # type: ignore
             if orig_tqdm is not None:
                 setattr(_tqdm_mod, "tqdm", orig_tqdm)
         except Exception:
@@ -247,10 +273,18 @@ def transcribe_audio(
     result_dict = result_obj.to_dict() if hasattr(result_obj, "to_dict") else dict(result_obj)
     detected_lang = result_dict.get("language", language)
     segments = result_dict.get("segments", [])
+    title = os.path.splitext(basename)[0]
 
     if not segments:
-        print_yellow("\n  ⚠️  Whisper no detectó voz en este audio.")
-        sys.exit(1)
+        log.info(f"Whisper no detectó voz en '{basename}'. Marcando pista como instrumental.")
+        lrc_lines = [
+            f"[ti:{title}]",
+            f"[by:Titofy — Whisper {model_name} | Instrumental]",
+            "[00:00.00] (instrumental)",
+        ]
+        with open(output_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lrc_lines) + "\n")
+        return {"segments": [], "text": "(instrumental)", "language": detected_lang, "is_instrumental": True}
 
     quality = estimate_transcription_quality(segments, duration)
 
@@ -262,7 +296,6 @@ def transcribe_audio(
         total_dur = duration or (segments[-1]["end"] if segments else 180.0)
         segments = classify_sections(segments, total_dur)
 
-    title = os.path.splitext(os.path.basename(audio_path))[0]
     lrc_lines = [
         f"[ti:{title}]",
         f"[by:Titofy — Whisper {model_name} | lang:{detected_lang}]",
@@ -304,18 +337,21 @@ def transcribe_audio(
         score_str = f"\033[31m{score_val}%\033[0m"
 
     if verbose:
-        print()
-        print("┌" + "─" * (inner_width - 2) + "┐")
-        print("│  RESULTADO".ljust(inner_width - 1) + "│")
-        print("├" + "─" * (inner_width - 2) + "┤")
-        print(f"│  Líneas generadas         : {lyric_count}".ljust(inner_width - 1) + "│")
-        print(f"│  Nivel de confianza       : {score_str}".ljust(inner_width - 1 + 9) + "│")
+        _safe_print()
+        def _res(key, val):
+            line = f"  │  {key:<24}: {val}"
+            _safe_print(line.ljust(inner_width + 2) + "│")
+        _safe_print("  ╭" + "─" * (inner_width - 2) + "╮")
+        _safe_print("  │  Resultado".ljust(inner_width + 2) + "│")
+        _safe_print("  │  " + "─" * (inner_width - 7) + "  │")
+        _res("Líneas sincronizadas", str(lyric_count))
+        _res("Nivel de confianza", score_str)
         if quality['low_confidence_segments'] > 0:
-            print(f"│  Segmentos baja confianza : {quality['low_confidence_segments']} ({quality['low_confidence_pct']}%)".ljust(inner_width - 1) + "│")
-        print("│".ljust(inner_width - 1) + "│")
-        print("│  Archivo guardado en:".ljust(inner_width - 1) + "│")
-        print(f"│  lrc/{lrc_name}".ljust(inner_width - 1) + "│")
-        print("└" + "─" * (inner_width - 2) + "┘\n")
+            _res("Segmentos baja confianza", f"{quality['low_confidence_segments']} ({quality['low_confidence_pct']}%)")
+        _safe_print("  │".ljust(inner_width + 2) + "│")
+        _res("Guardado en", f"lrc/{lrc_name}")
+        _safe_print("  ╰" + "─" * (inner_width - 2) + "╯")
+        _safe_print()
 
 
 

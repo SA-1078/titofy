@@ -15,7 +15,7 @@ from typing import Any
 
 from .base import LyricsProvider
 from ..models import LyricData, LyricLine, LyricSource
-from ..normalizer import clean_query, normalize_for_match, round_duration, generate_search_variations
+from ..normalizer import clean_query, normalize_for_match, round_duration, generate_search_variations, is_artist_compatible, is_lyrics_script_compatible
 
 try:
     from rapidfuzz import fuzz
@@ -32,7 +32,7 @@ except ImportError:
 
 
 class LyricsOvhProvider(LyricsProvider):
-    name: str = "lyrics_ovh"
+    name: str = "Fuente 3"
     BASE_URL: str = "https://api.lyrics.ovh"
     TIMEOUT_SECONDS: int = 5
     USER_AGENT: str = "Titofy/2.0 (https://github.com/titofy/titofy)"
@@ -133,11 +133,11 @@ class LyricsOvhProvider(LyricsProvider):
             else:
                 score = 80.0 if (target_title_norm in it_norm or it_norm in target_title_norm) else 0.0
 
-            if score > best_score and score >= 55.0:
+            if score > best_score and score >= 60.0:
                 best_score = score
                 best_item = item
 
-        return best_item or (items[0] if items else None)
+        return best_item
 
     def _make_request(self, url: str) -> Any | None:
         req = urllib.request.Request(
@@ -168,7 +168,10 @@ class LyricsOvhProvider(LyricsProvider):
         artist: str,
         plain_lyrics: str,
         duration: int | None,
-    ) -> LyricData:
+    ) -> LyricData | None:
+        if not is_lyrics_script_compatible(f"{artist} {title}", plain_lyrics):
+            return None
+
         lines = [LyricLine(text=l.strip(), start=None) for l in plain_lyrics.splitlines() if l.strip()]
 
         return LyricData(
@@ -178,5 +181,5 @@ class LyricsOvhProvider(LyricsProvider):
             source=LyricSource.ONLINE_ALIGNED,
             lines=lines,
             plain_lyrics=plain_lyrics,
-            provider=self.name,
+            provider="Fuente 3",
         )

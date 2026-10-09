@@ -1,17 +1,27 @@
-# 🎵 Titofy v2.2 — Suite de Letras Sincronizadas y Motor Híbrido
+# 🎵 Titofy — Suite de Letras Sincronizadas, Reproductor Nativo e IA Local
 
-**Titofy** es una herramienta para obtener, calibrar, transcribir y reproducir letras de canciones (`.lrc`) sincronizadas con archivos locales de audio, además de incluir un visualizador espectral en tiempo real.
+**Titofy** es una herramienta integral para obtener, calibrar, transcribir y reproducir letras de canciones (`.lrc`) sincronizadas con archivos locales de audio, además de incluir visualizadores espectrales reactivos en tiempo real.
 
 Incluye:
-- **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor.
+- **App Desktop (Flutter)**: Interfaz gráfica nativa oficial **v1.0.0** para **Linux** y **Windows** con modo karaoke, Studio IA offline, gestión de listas de reproducción y paleta de colores personalizable.
+- **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor (v2.3).
 - **Motor Híbrido & API FastAPI**: Búsqueda remota (LRCLIB / Lyrics.ovh), calibración mediante **Forced Alignment** y transcripción offline con **faster-whisper** (CTranslate2) en GPU/CPU.
-- **App Desktop (Flutter)**: Interfaz gráfica nativa para Linux y Windows (en desarrollo).
+- **Instaladores Oficiales**: Paquetes de instalación listos para usar en la carpeta `INSTALADORES/` (`Titofy-Setup-v1.0.0.exe` para Windows y script de integración nativa para Linux).
 
 ---
 
-## ✨ Novedades en v2.2
+## ✨ Novedades en CLIv2.3 & Desktop v1.0
 
-La versión 2.2 implementa una arquitectura híbrida de resolución en 3 niveles, normalización de metadatos multi-artista y alineación por palabra para evitar desfases temporales.
+- 🚀 **Primera versión oficial de Titofy Desktop (v1.0.0)**:
+  - Lanzamiento completo para **Windows 10/11** y **Linux** (Ubuntu, Debian, Fedora, Arch).
+  - Instalador gráfico para Windows: **`Titofy-Setup-v1.0.0.exe`** con asistente de instalación paso a paso, términos de licencia y accesos directos.
+  - Instalador nativo para Linux: Script de instalación de 1 comando con integración en el menú de aplicaciones, íconos del sistema y comando global `titofy`.
+  - **Selector de Color de la Aplicación**: Personalización de temas y acentos de color dinámicos.
+  - **Atajos directos de listas de reproducción**: Añade pistas al vuelo desde el reproductor inferior.
+  - **Studio IA**: Transcripción y sincronización de canciones offline con modelos Whisper calibrados según el tipo de audio.
+- ⚡ **Mejoras en el Motor y CLI (v2.3)**:
+  - Optimización en la normalización de metadatos multi-artista y eliminación de etiquetas de calidad.
+  - Mayor tolerancia a fallos de conexión y resolución híbrida de 3 niveles en tiempo récord.
 
 ```
 ┌────────────────────────────────────────────────────────────────────────────────────────┐
@@ -95,9 +105,10 @@ Para evitar que Whisper colapse varias líneas cortas en un solo renglón largo 
 
 | Módulo | Estado | Descripción |
 | :--- | :---: | :--- |
-| **Titofy CLI (Node.js)** | 🟢 Estable | Menú interactivo, reproductor con scroll y visualizador FFT. |
-| **Backend (Python)** | 🟢 Estable | Motor híbrido, Forced Alignment, faster-whisper y API FastAPI. |
-| **Titofy Desktop (Flutter)** | 🟡 Desarrollo | Interfaz gráfica nativa (en progreso). |
+| **Titofy Desktop (Flutter)** | 🟢 Estable (v1.0.0) | Reproductor gráfico nativo para Linux y Windows con soporte de karaoke e IA. |
+| **Titofy CLI (Node.js)** | 🟢 Estable (v2.3) | Menú interactivo, reproductor con scroll y visualizador FFT. |
+| **Backend (Python)** | 🟢 Estable (v1.0.0) | Motor híbrido, Forced Alignment, faster-whisper y API FastAPI. |
+| **Instaladores Oficiales** | 🟢 Disponible | Script automatizado para Linux y ejecutable `Titofy-Setup-v1.0.0.exe` para Windows. |
 
 ---
 
@@ -105,6 +116,11 @@ Para evitar que Whisper colapse varias líneas cortas en un solo renglón largo 
 
 ```text
 titofy/
+├── INSTALADORES/                → Instaladores listos para producción (Linux y Windows)
+│   ├── linux/                   → Instalador y desinstalador nativo (.sh)
+│   ├── windows/                 → Asistente Inno Setup (.iss) y compilador de Windows
+│   └── README.md                → Guía pública de instalación
+│
 ├── backend/                     → API local y motor IA (Python 3.11+)
 │   ├── api_server.py            → Servidor FastAPI (http://127.0.0.1:8642/docs)
 │   ├── whisper_transcribe.py    → Transcripción CLI offline
@@ -203,9 +219,9 @@ Opciones principales:
 
 | Modelo | Parámetros | VRAM / RAM | Tiempo en GPU (pista 3.5 min) | Tiempo en CPU (int8) |
 | :--- | :---: | :---: | :---: | :---: |
-| **`base`** | 74M | ~1 GB | ~1-2s | ~10s |
-| **`small`** | 244M | ~2 GB | ~2-4s | ~20s |
-| **`turbo`** | 809M | ~4 GB | ~3-5s | ~30s |
+| **`base`** | 74M | ~1 GB | ~1-2 segundos | ~10-15 segundos |
+| **`small`** | 244M | ~2 GB | ~2-4 segundos | ~20-25 segundos |
+| **`turbo`** | 809M | ~4 GB | ~3-5 segundos | ~30-40 segundos |
 
 ---
 
@@ -227,6 +243,6 @@ Consulta el archivo [LICENSE](LICENSE) para más detalles.
 
 ---
 
-*Titofy v2.2 — Letras sincronizadas con la velocidad de la nube y la potencia de tu GPU local.*
+*Titofy v2.3 & Titofy Desktop v1.0 — Letras sincronizadas con la velocidad de la nube y la potencia de tu GPU local.*
 
 Titofy - Santiago Colimba. Todos los derechos reservados ©2026.
