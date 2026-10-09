@@ -131,18 +131,22 @@ class ApiService extends ChangeNotifier {
       });
       _backendProcess?.stderr.transform(utf8.decoder).listen((data) {
         debugPrint('[FastAPI-stderr] $data');
-        _lastErrorMessage = data;
+        _lastErrorMessage = data.trim();
+        notifyListeners();
       });
 
       _backendProcess?.exitCode.then((code) {
         debugPrint('[ApiService] Backend process finalizó con código: $code');
+        if (code != 0 && (_lastErrorMessage == null || _lastErrorMessage!.isEmpty)) {
+          _lastErrorMessage = 'El backend se cerró inesperadamente (código: $code)';
+        }
         _isOnline = false;
         notifyListeners();
       });
 
-      // Esperar hasta 8 segundos a que la API responda
-      for (int i = 0; i < 24; i++) {
-        await Future.delayed(const Duration(milliseconds: 350));
+      // Esperar hasta 15 segundos a que la API responda (30 iteraciones x 500ms)
+      for (int i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(milliseconds: 500));
         if (await checkHealth() != null) {
           _isStartingBackend = false;
           _lastErrorMessage = null;
@@ -168,8 +172,10 @@ class ApiService extends ChangeNotifier {
     final currentDir = Directory.current.path;
     final candidates = [
       '$exeDir/backend',
+      exeDir,
       '$exeDir/../backend',
       '$currentDir/backend',
+      currentDir,
       '$currentDir/../backend',
       '$currentDir/../../backend',
       '/home/santiago007/Documentos/titofy/backend',

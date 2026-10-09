@@ -38,11 +38,30 @@ jobs:
 
       - name: Compilar Backend FastAPI a Ejecutable Windows (api_server.exe)
         run: |
+          $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
           pip install fastapi "uvicorn[standard]" requests mutagen rapidfuzz pyyaml pydantic pyinstaller
           cd backend
-          python -m PyInstaller --noconfirm --onefile --console --name api_server --hidden-import uvicorn.logging --hidden-import uvicorn.loops.auto --hidden-import uvicorn.protocols.http.auto --hidden-import uvicorn.lifespan.on --collect-all lyrics api_server.py
-          Copy-Item dist\api_server.exe -Destination .
+          python -m PyInstaller --noconfirm --onefile --console --name api_server `
+            --hidden-import uvicorn.logging `
+            --hidden-import uvicorn.loops.auto `
+            --hidden-import uvicorn.loops.asyncio `
+            --hidden-import uvicorn.protocols.http.auto `
+            --hidden-import uvicorn.protocols.http.h11_impl `
+            --hidden-import uvicorn.protocols.websockets.auto `
+            --hidden-import uvicorn.lifespan.on `
+            --hidden-import uvicorn.lifespan.off `
+            --collect-all lyrics `
+            --collect-all postprocess `
+            --add-data "config.yaml;." `
+            api_server.py
+          if (!(Test-Path "dist\api_server.exe")) {
+            throw "Error critico: PyInstaller no genero dist\api_server.exe"
+          }
+          Copy-Item dist\api_server.exe -Destination . -Force
+          New-Item -ItemType Directory -Force -Path ..\desktop\build\windows\x64\runner\Release\backend | Out-Null
+          Copy-Item dist\api_server.exe -Destination ..\desktop\build\windows\x64\runner\Release\backend\ -Force
+          Copy-Item config.yaml -Destination ..\desktop\build\windows\x64\runner\Release\backend\ -Force
 
       - name: Instalar Inno Setup
         run: choco install innosetup -y

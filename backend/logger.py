@@ -18,13 +18,24 @@ import os
 import sys
 from datetime import datetime
 
+# Forzar codificacion UTF-8 en Windows para evitar UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 
 # Cache de loggers ya configurados
 _configured_loggers = set()
 
 
 class SafeStream:
-    """Envuelve sys.stdout / sys.stderr para absorber BrokenPipeError y OSError en procesos huérfanos o cerrados."""
+    """Envuelve sys.stdout / sys.stderr para absorber BrokenPipeError, UnicodeEncodeError y OSError."""
     def __init__(self, target):
         self._target = target
 
@@ -33,6 +44,11 @@ class SafeStream:
             return self._target.write(s)
         except (BrokenPipeError, OSError):
             return len(s) if hasattr(s, "__len__") else 0
+        except UnicodeEncodeError:
+            try:
+                return self._target.write(s.encode("ascii", errors="replace").decode("ascii"))
+            except Exception:
+                return len(s) if hasattr(s, "__len__") else 0
 
     def flush(self):
         try:

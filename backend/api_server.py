@@ -22,6 +22,18 @@ Endpoints:
 import os
 import sys
 
+# Forzar codificacion UTF-8 en streams estandar de Windows para evitar UnicodeEncodeError
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if hasattr(sys.stderr, "reconfigure"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 # Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -477,22 +489,25 @@ def _free_port_if_in_use(port: int):
 
 
 if __name__ == "__main__":
+    import multiprocessing
+    multiprocessing.freeze_support()
+
     import uvicorn
 
     host = cfg["api"]["host"]
     port = cfg["api"]["port"]
 
-    # Liberar puerto huérfano si estaba ocupado
+    # Liberar puerto huerfano si estaba ocupado
     _free_port_if_in_use(port)
 
     print()
-    print("  ╭──────────────────────────────────────────────────╮")
-    print("  │  🚀 Titofy API — Servidor Local                 │")
-    print("  ╰──────────────────────────────────────────────────╯")
-    print(f"  🌐 URL: http://{host}:{port}")
-    print(f"  📋 Docs: http://{host}:{port}/docs")
+    print("  --------------------------------------------------")
+    print("    Titofy API - Servidor Local")
+    print("  --------------------------------------------------")
+    print(f"   URL: http://{host}:{port}")
+    print(f"   Docs: http://{host}:{port}/docs")
     print()
 
     log.info(f"API server iniciando en {host}:{port}")
 
-    uvicorn.run(app, host=host, port=port, log_level="warning")
+    uvicorn.run(app, host=host, port=port, reload=False, workers=1, log_level="warning")
