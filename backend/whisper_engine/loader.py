@@ -149,6 +149,18 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     return os.path.exists(model_path)
 
 
+def get_best_available_model(preferred: str = "base") -> str:
+    """Retorna el modelo preferido si está descargado; de lo contrario, el primer modelo disponible en caché local."""
+    if is_model_downloaded(preferred):
+        return preferred
+    candidates = ["small", "base", "turbo", "large-v3-turbo"]
+    for c in candidates:
+        if c != preferred and is_model_downloaded(c):
+            log.info(f"Modelo preferido '{preferred}' no descargado. Usando modelo local disponible: '{c}'")
+            return c
+    return preferred
+
+
 def load_whisper_model(model_name: str, device: str, compute_type: str = "auto"):
     """
     Carga el modelo Whisper con tolerancia a fallos de GPU/drivers.

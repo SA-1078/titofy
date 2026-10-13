@@ -57,6 +57,7 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView> with SingleTick
   @override
   void initState() {
     super.initState();
+    HardwareKeyboard.instance.addHandler(_handleKeyEvent);
     _spectrumController = SpectrumController();
 
     // Restaurar configuracion guardada de tema y modo del espectro
@@ -104,10 +105,68 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView> with SingleTick
 
   @override
   void dispose() {
+    HardwareKeyboard.instance.removeHandler(_handleKeyEvent);
     _ticker.dispose();
     _spectrumController.dispose();
     _lyricsScrollCtrl.dispose();
     super.dispose();
+  }
+
+  bool _handleKeyEvent(KeyEvent event) {
+    if (event is! KeyDownEvent) return false;
+
+    // Si el foco actual está en un campo de texto o editor, permitir escribir normalmente
+    final primaryFocus = FocusManager.instance.primaryFocus;
+    if (primaryFocus != null) {
+      final debugLabel = primaryFocus.debugLabel?.toLowerCase() ?? '';
+      if (debugLabel.contains('editable') || debugLabel.contains('textfield')) {
+        return false;
+      }
+      final ctx = primaryFocus.context;
+      if (ctx != null) {
+        if (ctx.widget is EditableText || ctx.findAncestorWidgetOfExactType<EditableText>() != null) {
+          return false;
+        }
+      }
+    }
+
+    if (event.logicalKey == LogicalKeyboardKey.escape || event.logicalKey == LogicalKeyboardKey.keyQ) {
+      if (!widget.isEmbedded && Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+        return true;
+      }
+    }
+
+    final player = context.read<PlayerService>();
+    if (player.currentTrack == null) return false;
+
+    if (event.logicalKey == LogicalKeyboardKey.space) {
+      player.playPause();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      player.seekRelative(const Duration(seconds: -10));
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      player.seekRelative(const Duration(seconds: 10));
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
+      player.changeVolume(0.05);
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
+      player.changeVolume(-0.05);
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.mediaPlayPause) {
+      player.playPause();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.mediaTrackNext) {
+      player.next();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.mediaTrackPrevious) {
+      player.previous();
+      return true;
+    }
+
+    return false;
   }
 
   void _scrollToActiveLyric(int index) {
@@ -851,50 +910,7 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView> with SingleTick
     final sungText = curr.substring(0, splitIndex);
     final unsungText = curr.substring(splitIndex);
 
-    return Focus(
-      autofocus: true,
-      onKeyEvent: (node, event) {
-        if (event is KeyDownEvent) {
-          final route = ModalRoute.of(context);
-          if (route != null && !route.isCurrent) {
-            return KeyEventResult.ignored;
-          }
-
-          final primaryFocus = FocusManager.instance.primaryFocus;
-          if (primaryFocus != null) {
-            final debugLabel = primaryFocus.debugLabel?.toLowerCase() ?? '';
-            if (debugLabel.contains('editable') || debugLabel.contains('textfield')) {
-              return KeyEventResult.ignored;
-            }
-            final ctx = primaryFocus.context;
-            if (ctx != null && (ctx.widget is EditableText || ctx.findAncestorWidgetOfExactType<EditableText>() != null)) {
-              return KeyEventResult.ignored;
-            }
-          }
-
-          if (event.logicalKey == LogicalKeyboardKey.space) {
-            player.playPause();
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-            player.seekTo(player.position - const Duration(seconds: 10));
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-            player.seekTo(player.position + const Duration(seconds: 10));
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
-            player.setVolume((player.volume + 0.05).clamp(0.0, 1.0));
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
-            player.setVolume((player.volume - 0.05).clamp(0.0, 1.0));
-            return KeyEventResult.handled;
-          } else if (event.logicalKey == LogicalKeyboardKey.escape || event.logicalKey == LogicalKeyboardKey.keyQ) {
-            if (!widget.isEmbedded) Navigator.of(context).pop();
-            return KeyEventResult.handled;
-          }
-        }
-        return KeyEventResult.ignored;
-      },
-      child: Center(
+    return Center(
         child: Container(
           constraints: const BoxConstraints(maxWidth: 880),
           padding: const EdgeInsets.symmetric(horizontal: 26, vertical: 20),
@@ -1095,8 +1111,7 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView> with SingleTick
             ],
           ),
         ),
-      ),
-    );
+      );
   }
 
   // ── MODO 2: Reproductor Animado Estilo CLI (5 slots con warmup y glow) ─────

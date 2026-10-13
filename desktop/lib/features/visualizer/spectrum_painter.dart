@@ -83,32 +83,40 @@ class SpectrumPainter extends CustomPainter {
       (index) => index / (gradientColors.length - 1),
     );
 
-    final barShader = ui.Gradient.linear(
-      Offset(0, size.height - maxHeight),
-      Offset(0, size.height),
-      gradientColors,
-      stops,
-    );
+    final barShader = (theme == VisualizerTheme.rainbow)
+        ? ui.Gradient.linear(
+            const Offset(0, 0),
+            Offset(size.width, 0),
+            gradientColors,
+            stops,
+          )
+        : ui.Gradient.linear(
+            Offset(0, size.height - maxHeight),
+            Offset(0, size.height),
+            gradientColors,
+            stops,
+          );
 
     final barPaint = Paint()
       ..shader = barShader
       ..style = PaintingStyle.fill;
 
-    // ── 4. Dibujar Barras Neón a lo Largo de Toda la Pantalla (Sin Guiones) ──
+    // ── 4. Dibujar Barras Neón Agrupadas en un Solo Path para Máximo Rendimiento ──
+    final barsPath = Path();
     for (int i = 0; i < numBars; i++) {
       final double x = i * (barWidth + barSpacing);
       final double level = levels[i].clamp(0.015, 1.0);
       final double barH = (level * maxHeight).clamp(4.0, maxHeight);
       final double y = size.height - barH;
 
-      // Barra vertical continua con bordes redondeados arriba
-      final rrect = RRect.fromRectAndCorners(
+      final radius = Radius.circular(math.min(barWidth / 2, 4.0));
+      barsPath.addRRect(RRect.fromRectAndCorners(
         Rect.fromLTWH(x, y, barWidth, barH),
-        topLeft: Radius.circular(math.min(barWidth / 2, 4.0)),
-        topRight: Radius.circular(math.min(barWidth / 2, 4.0)),
-      );
-      canvas.drawRRect(rrect, barPaint);
+        topLeft: radius,
+        topRight: radius,
+      ));
     }
+    canvas.drawPath(barsPath, barPaint);
 
     // ── 5. Línea Base Neón de Horizonte ──────────────────────────────────────
     final baseLinePaint = Paint()

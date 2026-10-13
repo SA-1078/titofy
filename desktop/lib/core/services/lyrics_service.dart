@@ -326,10 +326,22 @@ class LyricsService extends ChangeNotifier {
   }
 
   /// Ajusta las marcas de tiempo de la letra actual escuchando el archivo de audio local con Whisper (Forced Alignment)
-  Future<bool> realignWithAudio({String model = 'base'}) async {
+  Future<bool> realignWithAudio({String? model}) async {
     if (_loadedAudioPath == null || _loadedAudioPath!.isEmpty) return false;
     final file = File(_loadedAudioPath!);
     if (!file.existsSync()) return false;
+
+    // Usar el modelo descargado en disco si existe
+    String effectiveModel = model ?? 'small';
+    try {
+      final models = await _apiService.getModels();
+      for (final m in models) {
+        if (m['downloaded'] == true) {
+          effectiveModel = m['id']?.toString() ?? effectiveModel;
+          break;
+        }
+      }
+    } catch (_) {}
 
     _isLoading = true;
     _statusMessage = 'Alineando letra con el audio local (IA)...';
@@ -341,7 +353,7 @@ class LyricsService extends ChangeNotifier {
         title: _loadedTitle,
         audioPath: _loadedAudioPath!,
         outputPath: null,
-        model: model,
+        model: effectiveModel,
         mode: 'online_align',
         force: true,
       );

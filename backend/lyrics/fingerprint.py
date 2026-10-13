@@ -67,8 +67,8 @@ def extract_metadata_via_ffprobe(audio_path: str) -> tuple[str | None, str | Non
             except (ValueError, TypeError):
                 duration_sec = None
 
-        artist = raw_artist.strip() if raw_artist and str(raw_artist).strip() else None
-        title = raw_title.strip() if raw_title and str(raw_title).strip() else None
+        artist = str(raw_artist).strip() if raw_artist and str(raw_artist).strip() else None
+        title = str(raw_title).strip() if raw_title and str(raw_title).strip() else None
 
         if artist or title:
             log.info(f"[Paso 0: ffprobe] Metadatos encontrados en tags de audio: '{artist}' - '{title}' ({duration_sec}s)")
@@ -154,8 +154,12 @@ def identify_audio(audio_path: str | None) -> tuple[str | None, str | None, int 
     if not audio_path or not os.path.exists(audio_path):
         return (None, None, None)
 
+    from lyrics.normalizer import clean_song_metadata
+
     # 1. Intentar ffprobe tags embebidos
     f_artist, f_title, f_dur = extract_metadata_via_ffprobe(audio_path)
+    if f_artist or f_title:
+        f_artist, f_title = clean_song_metadata(f_artist, f_title)
     if f_artist and f_title:
         return (f_artist, f_title, f_dur)
 
@@ -164,6 +168,7 @@ def identify_audio(audio_path: str | None) -> tuple[str | None, str | None, int 
     if fp and fp_dur:
         a_artist, a_title = lookup_acoustid(fp, fp_dur)
         if a_artist or a_title:
+            a_artist, a_title = clean_song_metadata(a_artist, a_title)
             return (a_artist or f_artist, a_title or f_title, f_dur or fp_dur)
 
     return (f_artist, f_title, f_dur)

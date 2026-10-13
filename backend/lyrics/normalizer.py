@@ -78,6 +78,42 @@ def clean_query(text: str | None) -> str:
     return cleaned
 
 
+ARTIST_DESCRIPTOR_PATTERN = re.compile(
+    r"\s*[-_–,/|]?\s*\b(?:grupo\s+musical|orquesta|banda\s+musical|conjunto|music\s+group|musical\s+group|agrupacion\s+musical|agrupación\s+musical)\b\s*[-_–,/|]?",
+    re.IGNORECASE,
+)
+
+
+def clean_artist(artist: str | None) -> str:
+    """Limpia el nombre del artista eliminando descriptores genéricos como 'grupo musical', 'orquesta', etc."""
+    if not artist:
+        return ""
+    cleaned = clean_query(artist)
+    cleaned = ARTIST_DESCRIPTOR_PATTERN.sub("", cleaned)
+    return re.sub(r"\s+", " ", cleaned).strip()
+
+
+def clean_song_metadata(artist: str | None, title: str | None) -> tuple[str, str]:
+    """
+    Normaliza el par (artista, título) eliminando descriptores de grupo y
+    recortando nombres de artista redundantes que se hayan colado en el título.
+    Ej: ('winiaypa grupo musical', 'Ay Casi Casi - Winiaypa') -> ('winiaypa', 'Ay Casi Casi')
+    """
+    c_artist = clean_artist(artist)
+    c_title = clean_query(title)
+
+    if c_artist and c_title:
+        escaped_artist = re.escape(c_artist)
+        c_title = re.sub(rf"\s*[-_–/|:]\s*{escaped_artist}\s*$", "", c_title, flags=re.IGNORECASE).strip()
+        c_title = re.sub(rf"^\s*{escaped_artist}\s*[-_–/|:]\s*", "", c_title, flags=re.IGNORECASE).strip()
+
+        first_word = c_artist.split()[0] if c_artist.split() else ""
+        if len(first_word) >= 4:
+            esc_first = re.escape(first_word)
+            c_title = re.sub(rf"\s*[-_–/|:]\s*{esc_first}\s*$", "", c_title, flags=re.IGNORECASE).strip()
+
+    return c_artist, c_title
+
 
 def normalize_for_match(text: str | None) -> str:
     """

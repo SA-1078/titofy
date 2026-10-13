@@ -68,17 +68,15 @@ class SpectrumController extends ChangeNotifier {
       return;
     }
 
-    // ── 1. AVANCE DE TIEMPO +30% MÁS RÁPIDO Y DINÁMICO ──────────────────────
-    // Aumentamos la velocidad de tiempo en un 30% para emparejar el ritmo real
-    _internalTime += clampedDt * 1.30;
+    // ── 1. AVANCE DE TIEMPO SUAVE Y ULTRA FLUIDO (SIN JITTER NI TIRONES) ─────
+    _internalTime += clampedDt * 1.25;
 
     if (playbackPositionMs != null && playbackPositionMs > 0) {
-      final double trackSec = (playbackPositionMs / 1000.0) * 1.30;
+      final double trackSec = (playbackPositionMs / 1000.0) * 1.25;
       final double diff = trackSec - _internalTime;
-      if (diff.abs() > 0.45) {
+      // Resincronizar únicamente si hubo un salto o seek manual mayor a 1.2 segundos
+      if (diff.abs() > 1.2) {
         _internalTime = trackSec;
-      } else {
-        _internalTime += diff * 0.02;
       }
     }
 
