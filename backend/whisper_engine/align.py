@@ -247,23 +247,20 @@ def align_lyrics(
     try:
         model, _ = load_whisper_model(model_name, device=device, compute_type=compute_type)
     except Exception as exc:
-        log.warning(f"Fallo al cargar faster-whisper ({exc}). Intentando con stable_whisper directo...")
-        try:
-            import stable_whisper
-            model = stable_whisper.load_model(model_name, device=device)
-        except Exception as exc_sw:
-            raise RuntimeError(f"Error al cargar modelo de alineación: {exc_sw}")
+        log.error(f"Error al cargar modelo de alineación: {exc}")
+        raise RuntimeError(f"Error al cargar modelo de alineación Whisper ({model_name}): {exc}")
 
     log.info("Analizando acústica del audio con Whisper para capturar inicio real del canto...")
     _safe_print("  🎙️ Escuchando audio y detectando inicio real de la voz...")
 
+    transcribe_lang = None if (not language or language == "auto") else language
     result: typing.Any = None
     try:
         # 1. Transcripción acústica real con timestamps por palabra
-        result = model.transcribe(audio_path, language=language, word_timestamps=True)
+        result = model.transcribe(audio_path, language=transcribe_lang, word_timestamps=True)
     except (TypeError, Exception):
         try:
-            result = model.transcribe(audio_path, language=language)
+            result = model.transcribe(audio_path, language=transcribe_lang)
         except Exception as e_trans:
             log.warning(f"Transcripción directa con {device} falló ({e_trans}). Intentando alineación forzada clásica...")
             try:

@@ -119,13 +119,20 @@ class LyricsResolver:
                     )
 
                     # Si la letra ya está sincronizada (Fuente 1 / Fuente 2):
-                    # En modo 'online_align' o 'hybrid', alinear contra el audio local
+                    # En modo 'online_align' o 'hybrid', o en 'auto' si hay modelo descargado:
+                    # alinear contra el audio local
                     if res.is_synced:
-                        if mode in ("online_align", "hybrid") and audio_path and os.path.exists(audio_path):
-                            log.info(f"[Titofy] Modo '{mode}' solicitado: ejecutando calibración con audio local {audio_path}...")
+                        from whisper_engine.loader import is_any_model_downloaded, get_best_available_model
+                        should_align = (
+                            mode in ("online_align", "hybrid") or
+                            (mode == "auto" and is_any_model_downloaded())
+                        )
+                        if should_align and audio_path and os.path.exists(audio_path):
+                            effective_model = get_best_available_model(model_name)
+                            log.info(f"[Titofy] Modo '{mode}' con modelo '{effective_model}': ejecutando calibración acústica con audio local {audio_path}...")
                             try:
                                 aligned = await asyncio.to_thread(
-                                    self._align, res, audio_path, model_name=model_name, language=language
+                                    self._align, res, audio_path, model_name=effective_model, language=language
                                 )
                                 if aligned and aligned.is_synced and len(aligned.lines) > 0:
                                     aligned.title = res.title or clean_title
@@ -149,11 +156,17 @@ class LyricsResolver:
 
                 plain_text = pres.plain_lyrics or pres.get_plain_text()
                 if plain_text:
-                    if mode == "online_align" and audio_path and os.path.exists(audio_path):
-                        log.info(f"[Titofy Nivel 2] Alineando letra plana con audio local vía Whisper (modo online_align)...")
+                    from whisper_engine.loader import is_any_model_downloaded, get_best_available_model
+                    should_align = (
+                        mode in ("online_align", "hybrid") or
+                        (mode == "auto" and is_any_model_downloaded())
+                    )
+                    if should_align and audio_path and os.path.exists(audio_path):
+                        effective_model = get_best_available_model(model_name)
+                        log.info(f"[Titofy Nivel 2] Alineando letra plana con audio local vía Whisper ({effective_model})...")
                         try:
                             aligned = await asyncio.to_thread(
-                                self._align, pres, audio_path, model_name=model_name, language=language
+                                self._align, pres, audio_path, model_name=effective_model, language=language
                             )
                             if aligned and aligned.is_synced and len(aligned.lines) > 0:
                                 aligned.title = pres.title or clean_title

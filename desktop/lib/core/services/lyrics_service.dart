@@ -332,7 +332,7 @@ class LyricsService extends ChangeNotifier {
     if (!file.existsSync()) return false;
 
     // Usar el modelo descargado en disco si existe
-    String effectiveModel = model ?? 'small';
+    String effectiveModel = model ?? 'turbo';
     try {
       final models = await _apiService.getModels();
       for (final m in models) {

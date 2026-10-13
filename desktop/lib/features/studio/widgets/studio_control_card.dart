@@ -33,6 +33,7 @@ class StudioControlCard extends StatelessWidget {
 
     final modeLabel = {
       'auto': 'Híbrido',
+      'hybrid': 'Híbrido',
       'ai_only': 'Solo IA',
       'online_only': 'Solo Online',
       'align': 'Alinear',

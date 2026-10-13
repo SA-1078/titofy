@@ -26,7 +26,7 @@ class _StudioPageState extends State<StudioPage> {
   String? _selectedFilePath;
   String _selectedModel = 'small';
   String _selectedLanguage = 'auto';
-  String _selectedMode = 'auto'; // 'auto', 'ai_only', 'online_only', 'align'
+  String _selectedMode = 'hybrid'; // 'hybrid', 'ai_only', 'online_only', 'align'
 
   bool _isProcessing = false;
   double _progressValue = 0.0;
