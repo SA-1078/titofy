@@ -187,15 +187,27 @@ class LyricsService extends ChangeNotifier {
         final content = await existingFile.readAsString();
         final parsed = parseLrc(content);
         if (parsed.isNotEmpty) {
-          _lines = parsed;
-          final isCliCache = existingFile.path.contains('cli/lrc');
-          _sourceType = 'local_file';
-          final originName = isCliCache ? 'Caché CLI (.lrc)' : 'Archivo .lrc local';
-          _currentSource = originName;
-          _statusMessage = 'Letra cargada desde archivo local (.lrc)';
-          _isLoading = false;
-          notifyListeners();
-          return;
+          final normalizedPath = existingFile.path.replaceAll('\\', '/').toLowerCase();
+          final isCliCache = normalizedPath.contains('cli/lrc');
+          final isAcousticallyAligned = content.toLowerCase().contains('online_aligned') ||
+              content.toLowerCase().contains('alineada con audio') ||
+              content.toLowerCase().contains('calibrado');
+
+          // Un LRC online antiguo no representa necesariamente esta versión
+          // del audio (por ejemplo, un videoclip con 26 s de intro). Déjalo
+          // pasar al backend para que pueda alinearse con el archivo local.
+          if (isCliCache && !isAcousticallyAligned) {
+            debugPrint('[LyricsService] Ignorando caché online no alineada: ${existingFile.path}');
+          } else {
+            _lines = parsed;
+            final originName = isCliCache ? 'Caché CLI (.lrc)' : 'Archivo .lrc local';
+            _sourceType = 'local_file';
+            _currentSource = originName;
+            _statusMessage = 'Letra cargada desde archivo local (.lrc)';
+            _isLoading = false;
+            notifyListeners();
+            return;
+          }
         }
       } catch (e) {
         debugPrint('[LyricsService] Error leyendo .lrc existente: $e');
@@ -232,43 +244,10 @@ class LyricsService extends ChangeNotifier {
       stageTimer.cancel();
 
       if (res != null && res['lines'] != null && (res['lines'] as List).isNotEmpty) {
-        final rawLines = res['lines'] as List<dynamic>;
-        _lines = rawLines.map((item) {
-          final sec = (item['start'] as num? ?? item['time'] as num? ?? 0.0).toDouble();
-          return LyricLine(
-            time: Duration(milliseconds: (sec * 1000).round()),
-            text: (item['text'] ?? '').toString(),
-          );
-        }).toList();
-
-        final src = res['source']?.toString().toLowerCase() ?? '';
-        final prov = res['provider']?.toString() ?? '';
-
-        if (src == 'online_aligned' || prov.contains('Alineada') || prov.toLowerCase().contains('calibrado')) {
-          _sourceType = 'hybrid';
-          _currentSource = prov.isNotEmpty ? prov : 'Fuente 1 · Alineada con Audio';
-          _statusMessage = 'Letra alineada con el audio local';
-        } else if (src == 'ai_generated' || prov.toLowerCase().contains('whisper')) {
-          _sourceType = 'local_ai';
-          _currentSource = 'Whisper IA (Transcripción)';
-          _statusMessage = 'Letra transcrita con IA local';
-        } else if (prov.contains('Fuente 1') || prov.toLowerCase().contains('lrclib')) {
-          _sourceType = 'online';
-          _currentSource = 'Fuente 1';
-          _statusMessage = 'Letra sincronizada obtenida de Fuente 1';
-        } else if (prov.contains('Fuente 2') || prov.toLowerCase().contains('netease')) {
-          _sourceType = 'online';
-          _currentSource = 'Fuente 2';
-          _statusMessage = 'Letra sincronizada obtenida de Fuente 2';
-        } else if (prov.contains('Fuente 3') || prov.toLowerCase().contains('genius') || prov.toLowerCase().contains('lyrist')) {
-          _sourceType = 'online';
-          _currentSource = 'Fuente 3';
-          _statusMessage = 'Letra obtenida de Fuente 3';
-        } else {
-          _sourceType = 'online';
-          _currentSource = prov.isNotEmpty ? prov : 'Fuente 1';
-          _statusMessage = 'Letra sincronizada exitosamente';
-        }
+        applyResolvedResponse(res);
+        _isLoading = false;
+        notifyListeners();
+        return;
       } else {
         _sourceType = null;
         _currentSource = null;
@@ -284,6 +263,49 @@ class LyricsService extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
+  }
+
+  /// Aplica directamente una respuesta del backend sin volver a leer la caché.
+  /// Es importante después de una alineación: la caché puede contener el LRC
+  /// online anterior y no debe pisar el resultado recién calibrado.
+  bool applyResolvedResponse(Map<String, dynamic> res) {
+    final raw = res['lines'];
+    if (raw is! List || raw.isEmpty) return false;
+
+    _lines = raw.map((item) {
+      final map = item as Map;
+      final sec = (map['start'] as num? ?? map['time'] as num? ?? 0.0).toDouble();
+      return LyricLine(
+        time: Duration(milliseconds: (sec * 1000).round()),
+        text: (map['text'] ?? '').toString(),
+      );
+    }).toList();
+
+    final src = res['source']?.toString().toLowerCase() ?? '';
+    final prov = res['provider']?.toString() ?? '';
+    final lowerProv = prov.toLowerCase();
+    if (src == 'online_aligned' || lowerProv.contains('alineada') || lowerProv.contains('calibrado')) {
+      _sourceType = 'hybrid';
+      _currentSource = prov.isNotEmpty ? prov : 'Fuente 1 · Alineada con Audio';
+      _statusMessage = 'Letra alineada con el audio local';
+    } else if (src == 'ai_generated' || lowerProv.contains('whisper')) {
+      _sourceType = 'local_ai';
+      _currentSource = 'Whisper IA (Transcripción)';
+      _statusMessage = 'Letra transcrita con IA local';
+    } else if (prov.contains('Fuente 1') || lowerProv.contains('lrclib')) {
+      _sourceType = 'online';
+      _currentSource = 'Fuente 1';
+      _statusMessage = 'Letra sincronizada obtenida de Fuente 1';
+    } else if (prov.contains('Fuente 2') || lowerProv.contains('netease')) {
+      _sourceType = 'online';
+      _currentSource = 'Fuente 2';
+      _statusMessage = 'Letra sincronizada obtenida de Fuente 2';
+    } else {
+      _sourceType = 'online';
+      _currentSource = prov.isNotEmpty ? prov : 'Fuente 1';
+      _statusMessage = 'Letra sincronizada exitosamente';
+    }
+    return true;
   }
 
   /// Fuerza la regeneración de letras mediante Whisper / Alineación
@@ -302,14 +324,7 @@ class LyricsService extends ChangeNotifier {
       );
 
       if (res != null && res['lines'] != null && (res['lines'] as List).isNotEmpty) {
-        final rawLines = res['lines'] as List<dynamic>;
-        _lines = rawLines.map((item) {
-          final sec = (item['start'] as num? ?? item['time'] as num? ?? 0.0).toDouble();
-          return LyricLine(
-            time: Duration(milliseconds: (sec * 1000).round()),
-            text: (item['text'] ?? '').toString(),
-          );
-        }).toList();
+        applyResolvedResponse(res);
         _sourceType = 'local_ai';
         _currentSource = 'Whisper IA Local ($model)';
         _statusMessage = 'Letra generada con Whisper IA Local ($model)';
@@ -326,10 +341,25 @@ class LyricsService extends ChangeNotifier {
   }
 
   /// Ajusta las marcas de tiempo de la letra actual escuchando el archivo de audio local con Whisper (Forced Alignment)
-  Future<bool> realignWithAudio({String model = 'base'}) async {
+  Future<bool> realignWithAudio({String? model}) async {
     if (_loadedAudioPath == null || _loadedAudioPath!.isEmpty) return false;
     final file = File(_loadedAudioPath!);
     if (!file.existsSync()) return false;
+
+    // Usar el modelo descargado en disco si existe
+    String effectiveModel = model ?? 'turbo';
+    try {
+      final models = await _apiService.getModels();
+      const priority = ['turbo', 'small', 'base'];
+      for (final id in priority) {
+        final match = models.where((m) =>
+            m['id']?.toString() == id && m['downloaded'] == true);
+        if (match.isNotEmpty) {
+          effectiveModel = id;
+          break;
+        }
+      }
+    } catch (_) {}
 
     _isLoading = true;
     _statusMessage = 'Alineando letra con el audio local (IA)...';
@@ -341,21 +371,13 @@ class LyricsService extends ChangeNotifier {
         title: _loadedTitle,
         audioPath: _loadedAudioPath!,
         outputPath: null,
-        model: model,
+        model: effectiveModel,
         mode: 'online_align',
         force: true,
       );
 
       if (res != null && res['lines'] != null && (res['lines'] as List).isNotEmpty) {
-        final rawLines = res['lines'] as List<dynamic>;
-        _lines = rawLines.map((item) {
-          final sec = (item['start'] as num? ?? item['time'] as num? ?? 0.0).toDouble();
-          return LyricLine(
-            time: Duration(milliseconds: (sec * 1000).round()),
-            text: (item['text'] ?? '').toString(),
-          );
-        }).toList();
-
+        applyResolvedResponse(res);
         final prov = res['provider']?.toString() ?? '';
         _sourceType = 'hybrid';
         _currentSource = prov.isNotEmpty ? prov : 'Alineada con Audio (IA)';

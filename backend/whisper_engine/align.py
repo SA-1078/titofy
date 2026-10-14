@@ -96,19 +96,21 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
             matches = 0
             for t_offset, token in enumerate(tokens):
                 check_idx = s_idx + t_offset
-                if check_idx < total_words and clean_words[check_idx] == token:
-                    matches += 1
+                if check_idx < total_words:
+                    w_token = clean_words[check_idx]
+                    if w_token == token or (len(token) >= 4 and (token in w_token or w_token in token)):
+                        matches += 1
 
             score = matches / t_len
-            min_score = 0.4 if t_len >= 3 else 0.8
+            min_score = 0.35 if t_len >= 3 else 0.7
             if score >= min_score and score > best_match_score:
                 best_match_score = score
                 best_match_start = word_starts[s_idx]
                 best_match_end_idx = min(total_words - 1, s_idx + t_len)
-                if score >= 0.95:
+                if score >= 0.90:
                     break
 
-        if best_match_start is not None and best_match_score >= 0.4:
+        if best_match_start is not None and best_match_score >= 0.35:
             line_timestamps[line_idx] = best_match_start
             w_cursor = max(w_cursor, best_match_end_idx)
 
@@ -116,18 +118,22 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
     anchors = [(idx, ts) for idx, ts in enumerate(line_timestamps) if ts is not None]
     resolved_ts: list[float] = [0.0] * len(valid_lines)
 
+    first_detected_vocal = word_starts[0] if word_starts else 0.0
+
     if not anchors:
+        # Si no hubo anclas exactas, comenzar en el primer segundo acústico detectado
+        start_ts = first_detected_vocal
         for i in range(len(valid_lines)):
-            resolved_ts[i] = i * 2.5
+            resolved_ts[i] = start_ts + (i * 2.8)
     else:
         first_anchor_idx, first_anchor_ts = anchors[0]
 
-        # Rellenar antes de la primera ancla (sin retroceder a 0 si hay intro)
+        # Rellenar antes de la primera ancla sin retroceder a 0 si la voz empezó tarde
         resolved_ts[first_anchor_idx] = first_anchor_ts
         if first_anchor_idx > 0:
-            step = 2.0
+            step = (first_anchor_ts - first_detected_vocal) / first_anchor_idx if first_anchor_ts > first_detected_vocal else 2.0
             for i in range(first_anchor_idx - 1, -1, -1):
-                resolved_ts[i] = max(first_anchor_ts - ((first_anchor_idx - i) * step), 0.0)
+                resolved_ts[i] = max(first_anchor_ts - ((first_anchor_idx - i) * step), first_detected_vocal)
 
         # Rellenar entre anclas consecutivas
         for a_curr, a_next in zip(anchors[:-1], anchors[1:]):
@@ -231,75 +237,97 @@ def align_lyrics(
     wcfg = cfg.get("whisper", {})
     compute_type = wcfg.get("compute_type", "auto")
 
+    from whisper_engine.loader import get_best_available_model
+    effective_model = get_best_available_model(model_name)
+    if effective_model != model_name:
+        log.info(f"Modelo de alineación '{model_name}' sustituido por '{effective_model}' (disponible en disco).")
+        model_name = effective_model
+
     log.info(f"Cargando modelo '{model_name}' en {device} para alineación...")
     try:
         model, _ = load_whisper_model(model_name, device=device, compute_type=compute_type)
     except Exception as exc:
-        log.warning(f"Fallo al cargar faster-whisper ({exc}). Intentando con stable_whisper directo...")
-        try:
-            import stable_whisper
-            model = stable_whisper.load_model(model_name, device=device)
-        except Exception as exc_sw:
-            raise RuntimeError(f"Error al cargar modelo de alineación: {exc_sw}")
+        log.error(f"Error al cargar modelo de alineación: {exc}")
+        raise RuntimeError(f"Error al cargar modelo de alineación Whisper ({model_name}): {exc}")
 
     log.info("Analizando acústica del audio con Whisper para capturar inicio real del canto...")
     _safe_print("  🎙️ Escuchando audio y detectando inicio real de la voz...")
 
+    transcribe_lang = None if (not language or language == "auto") else language
     result: typing.Any = None
     try:
-        # 1. Transcripción acústica real: identifica exactamente en qué segundo comienza el canto
-        result = model.transcribe(audio_path, language=language)
-    except Exception as e_trans:
-        log.warning(f"Transcripción directa con {device} falló ({e_trans}). Intentando alineación forzada clásica...")
+        # 1. Transcripción acústica real con timestamps por palabra
+        result = model.transcribe(audio_path, language=transcribe_lang, word_timestamps=True)
+    except (TypeError, Exception):
         try:
-            result = _align_with_model(model, audio_path, lyrics_text, language)
-        except Exception as e:
-            if device == "cuda":
-                log.warning(f"Fallo en alineación GPU ({e}). Reintentando con CPU...")
-                try:
-                    model_cpu, _ = load_whisper_model(model_name, device="cpu", compute_type="int8")
-                    result = _align_with_model(model_cpu, audio_path, lyrics_text, language)
-                except Exception as e_cpu:
-                    log.error(f"Fallo definitivo en CPU: {e_cpu}")
-                    raise RuntimeError(f"Fallo en alineación con audio: {e_cpu}")
-            else:
-                log.error(f"Fallo en alineación: {e}")
-                raise RuntimeError(f"Fallo en alineación con audio: {e}")
+            result = model.transcribe(audio_path, language=transcribe_lang)
+        except Exception as e_trans:
+            log.warning(f"Transcripción directa con {device} falló ({e_trans}). Intentando alineación forzada clásica...")
+            try:
+                result = _align_with_model(model, audio_path, lyrics_text, language)
+            except Exception as e:
+                if device == "cuda":
+                    log.warning(f"Fallo en alineación GPU ({e}). Reintentando con CPU...")
+                    try:
+                        model_cpu, _ = load_whisper_model(model_name, device="cpu", compute_type="int8")
+                        result = _align_with_model(model_cpu, audio_path, lyrics_text, language)
+                    except Exception as e_cpu:
+                        log.error(f"Fallo definitivo en CPU: {e_cpu}")
+                        raise RuntimeError(f"Fallo en alineación con audio: {e_cpu}")
+                else:
+                    log.error(f"Fallo en alineación: {e}")
+                    raise RuntimeError(f"Fallo en alineación con audio: {e}")
 
-    segments = []
+    segments: list[dict[str, typing.Any]] = []
     if hasattr(result, "to_dict"):
-        segments = result.to_dict().get("segments", [])
+        raw_segs = result.to_dict().get("segments", [])
+        if isinstance(raw_segs, list):
+            for s in raw_segs:
+                if isinstance(s, dict):
+                    segments.append(s)
     elif isinstance(result, tuple) and len(result) == 2:
         segments_gen, _ = result
-        for s in segments_gen:
-            words = []
-            if hasattr(s, "words") and s.words:
-                for w in s.words:
-                    words.append({
-                        "word": getattr(w, "word", ""),
-                        "start": getattr(w, "start", 0.0),
-                        "end": getattr(w, "end", 0.0),
+        if hasattr(segments_gen, "__iter__"):
+            try:
+                for s in segments_gen:
+                    words: list[dict[str, typing.Any]] = []
+                    s_words = getattr(s, "words", None)
+                    if s_words is not None and hasattr(s_words, "__iter__"):
+                        for w in s_words:
+                            words.append({
+                                "word": str(getattr(w, "word", "") or ""),
+                                "start": float(getattr(w, "start", 0.0) or 0.0),
+                                "end": float(getattr(w, "end", 0.0) or 0.0),
+                            })
+                    segments.append({
+                        "start": float(getattr(s, "start", 0.0) or 0.0),
+                        "end": float(getattr(s, "end", 0.0) or 0.0),
+                        "text": str(getattr(s, "text", "") or ""),
+                        "words": words,
                     })
-            segments.append({
-                "start": getattr(s, "start", 0.0),
-                "end": getattr(s, "end", 0.0),
-                "text": getattr(s, "text", ""),
-                "words": words,
-            })
+            except TypeError:
+                pass
     elif isinstance(result, dict):
-        segments = result.get("segments", [])
+        raw_segs = result.get("segments", [])
+        if isinstance(raw_segs, list):
+            for s in raw_segs:
+                if isinstance(s, dict):
+                    segments.append(s)
 
     # Extraer todas las palabras reconocidas con timestamps reales
     all_words: list[dict[str, typing.Any]] = []
     for seg in segments:
+        if not isinstance(seg, dict):
+            continue
         seg_words = seg.get("words", [])
-        if seg_words:
+        if isinstance(seg_words, list) and seg_words:
             for w in seg_words:
-                all_words.append(w)
+                if isinstance(w, dict):
+                    all_words.append(w)
         else:
-            seg_text = seg.get("text", "").strip()
-            s_start = float(seg.get("start", 0.0))
-            s_end = float(seg.get("end", s_start + 2.0))
+            seg_text = str(seg.get("text", "") or "").strip()
+            s_start = float(seg.get("start", 0.0) or 0.0)
+            s_end = float(seg.get("end", s_start + 2.0) or (s_start + 2.0))
             tokens = seg_text.split()
             if tokens:
                 step = (s_end - s_start) / max(len(tokens), 1)
@@ -327,10 +355,13 @@ def align_lyrics(
     else:
         # Fallback a segmentos directos si no hay palabras
         for seg in segments:
-            text = seg.get("text", "").strip()
+            if not isinstance(seg, dict):
+                continue
+            text = str(seg.get("text", "") or "").strip()
             if not text:
                 continue
-            ts = to_lrc_timestamp(seg["start"])
+            seg_start = float(seg.get("start", 0.0) or 0.0)
+            ts = to_lrc_timestamp(seg_start)
             lrc_lines.append(f"[{ts}]{text}")
 
     lrc_content = "\n".join(lrc_lines)

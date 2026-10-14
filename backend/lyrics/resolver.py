@@ -93,8 +93,10 @@ class LyricsResolver:
                 if not title or not clean_query(title):
                     title = extracted_title
 
-        clean_artist = clean_query(artist) if artist else ""
-        clean_title = clean_query(title) if title else "Unknown Title"
+        from lyrics.normalizer import clean_song_metadata
+        clean_artist, clean_title = clean_song_metadata(artist, title)
+        if not clean_title:
+            clean_title = "Unknown Title"
 
         log.info(f"[Titofy Resolver] Resolviendo letra para: '{clean_artist}' - '{clean_title}' (mode={mode}, dur={dur_int}, force={force})")
 
@@ -117,14 +119,20 @@ class LyricsResolver:
                     )
 
                     # Si la letra ya está sincronizada (Fuente 1 / Fuente 2):
-                    # Retornarla de inmediato. NO ejecutar Whisper en reproducción regular
-                    # para mantener el CPU y la memoria al 0%.
+                    # En modo 'online_align' o 'hybrid', o en 'auto' si hay modelo descargado:
+                    # alinear contra el audio local
                     if res.is_synced:
-                        if mode == "online_align" and audio_path and os.path.exists(audio_path):
-                            log.info(f"[Titofy] Modo 'online_align' solicitado: ejecutando Forced Alignment con {audio_path}...")
+                        from whisper_engine.loader import is_any_model_downloaded, get_best_available_model
+                        should_align = (
+                            mode in ("online_align", "hybrid") or
+                            (mode == "auto" and is_any_model_downloaded())
+                        )
+                        if should_align and audio_path and os.path.exists(audio_path):
+                            effective_model = get_best_available_model(model_name)
+                            log.info(f"[Titofy] Modo '{mode}' con modelo '{effective_model}': ejecutando calibración acústica con audio local {audio_path}...")
                             try:
                                 aligned = await asyncio.to_thread(
-                                    self._align, res, audio_path, model_name=model_name, language=language
+                                    self._align, res, audio_path, model_name=effective_model, language=language
                                 )
                                 if aligned and aligned.is_synced and len(aligned.lines) > 0:
                                     aligned.title = res.title or clean_title
@@ -133,7 +141,13 @@ class LyricsResolver:
                                     self._save_lrc_if_requested(aligned, output_lrc, audio_path, force=force)
                                     return aligned
                             except Exception as e:
-                                log.warning(f"[Titofy] Alineación falló ({e}). Retornando letra sincronizada directa.")
+                                log.warning(f"[Titofy] Calibración con audio falló ({e}).")
+                                # Un modo explícito de alineación nunca debe degradar
+                                # silenciosamente a los timestamps de Internet.
+                                if mode in ("online_align", "hybrid"):
+                                    continue
+                            if mode in ("online_align", "hybrid"):
+                                continue
                         self._save_lrc_if_requested(res, output_lrc, audio_path, force=force)
                         return res
 
@@ -148,11 +162,17 @@ class LyricsResolver:
 
                 plain_text = pres.plain_lyrics or pres.get_plain_text()
                 if plain_text:
-                    if mode == "online_align" and audio_path and os.path.exists(audio_path):
-                        log.info(f"[Titofy Nivel 2] Alineando letra plana con audio local vía Whisper (modo online_align)...")
+                    from whisper_engine.loader import is_any_model_downloaded, get_best_available_model
+                    should_align = (
+                        mode in ("online_align", "hybrid") or
+                        (mode == "auto" and is_any_model_downloaded())
+                    )
+                    if should_align and audio_path and os.path.exists(audio_path):
+                        effective_model = get_best_available_model(model_name)
+                        log.info(f"[Titofy Nivel 2] Alineando letra plana con audio local vía Whisper ({effective_model})...")
                         try:
                             aligned = await asyncio.to_thread(
-                                self._align, pres, audio_path, model_name=model_name, language=language
+                                self._align, pres, audio_path, model_name=effective_model, language=language
                             )
                             if aligned and aligned.is_synced and len(aligned.lines) > 0:
                                 aligned.title = pres.title or clean_title
@@ -162,6 +182,11 @@ class LyricsResolver:
                                 return aligned
                         except Exception as e:
                             log.warning(f"Forced Alignment Nivel 2 falló ({e}).")
+                            if mode in ("online_align", "hybrid"):
+                                continue
+
+                    if should_align and mode in ("online_align", "hybrid"):
+                        continue
 
                     self._save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
                     return pres
@@ -273,6 +298,12 @@ class LyricsResolver:
 
         try:
             try:
+                from whisper_engine.loader import get_best_available_model
+                effective_model = get_best_available_model(model_name)
+            except Exception:
+                effective_model = model_name
+
+            try:
                 from whisper_engine.align import align_lyrics
             except ImportError:
                 from whisper_align import align_lyrics
@@ -281,7 +312,7 @@ class LyricsResolver:
                 audio_path=audio_path,
                 lyrics_text=lyrics_text,
                 output_path=tmp_lrc_path,
-                model_name=model_name,
+                model_name=effective_model,
                 language=effective_lang,
             )
 

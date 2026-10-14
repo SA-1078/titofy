@@ -85,7 +85,7 @@ class StudioStrategyCard extends StatelessWidget {
             spacing: 8,
             runSpacing: 8,
             children: [
-              _buildStrategyChip('auto', 'Híbrido (Online + Ajuste Local)', Icons.layers_rounded, c),
+              _buildStrategyChip('hybrid', 'Híbrido (Online + Ajuste Local)', Icons.layers_rounded, c),
               _buildStrategyChip('ai_only', 'Transcribir con IA Local', Icons.memory_rounded, c),
               _buildStrategyChip('online_only', 'Solo Online', Icons.cloud_rounded, c),
               _buildStrategyChip('align', 'Alinear con Audio', Icons.format_align_left_rounded, c),

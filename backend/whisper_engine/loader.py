@@ -118,13 +118,17 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
                 snapshots_dir = os.path.join(target, "snapshots")
                 if os.path.exists(snapshots_dir):
                     try:
-                        snaps = os.listdir(snapshots_dir)
-                        if snaps and any(os.listdir(os.path.join(snapshots_dir, s)) for s in snaps):
-                            return True
+                        for s in os.listdir(snapshots_dir):
+                            snap_path = os.path.join(snapshots_dir, s)
+                            if os.path.isdir(snap_path):
+                                snap_files = os.listdir(snap_path)
+                                # Verificar que realmente contenga model.bin o model.safetensors
+                                if any(f.startswith("model") and f.endswith((".bin", ".safetensors")) for f in snap_files):
+                                    return True
                     except Exception:
                         pass
                 try:
-                    if any(f.endswith((".bin", ".safetensors")) for f in os.listdir(target)):
+                    if any(f.startswith("model") and f.endswith((".bin", ".safetensors")) for f in os.listdir(target)):
                         return True
                 except Exception:
                     pass
@@ -149,11 +153,27 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     return os.path.exists(model_path)
 
 
+def is_any_model_downloaded() -> bool:
+    """Verifica si existe al menos un modelo Whisper con pesos completos listos en disco."""
+    return any(is_model_downloaded(m) for m in ["turbo", "large-v3-turbo", "small", "base", "tiny"])
+
+
+def get_best_available_model(preferred: str = "turbo") -> str:
+    """Retorna el modelo preferido si está descargado; de lo contrario, el mejor modelo disponible con pesos completos."""
+    if is_model_downloaded(preferred):
+        return preferred
+    candidates = ["turbo", "large-v3-turbo", "small", "base", "tiny"]
+    for c in candidates:
+        if c != preferred and is_model_downloaded(c):
+            log.info(f"Modelo preferido '{preferred}' no descargado/incompleto. Usando modelo disponible en disco: '{c}'")
+            return c
+    return preferred
+
+
 def load_whisper_model(model_name: str, device: str, compute_type: str = "auto"):
     """
-    Carga el modelo Whisper con tolerancia a fallos de GPU/drivers.
-    Prioriza 'faster-whisper' con fallback a PyTorch Whisper y reintento automático
-    en CPU si CUDA o el driver de NVIDIA fallan.
+    Carga el modelo Whisper con tolerancia a fallos de GPU/drivers y fallback automático entre modelos.
+    Prioriza 'faster-whisper' nativo sin dependencias de PyTorch.
     """
     try:
         from lyric_config import get_config
@@ -182,43 +202,51 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
 
     num_threads = int(os.environ.get("CT2_NUM_THREADS", "4"))
 
-    try:
-        from faster_whisper import WhisperModel
-        log.info(f"Cargando faster-whisper ({model_name_fw}) en {device} ({selected_compute}, {num_threads} hilos)...")
-        model = WhisperModel(model_name_fw, device=device, compute_type=selected_compute, cpu_threads=num_threads)
-        return model, True
-    except Exception as e:
-        log.warning(f"Fallo faster-whisper en {device}: {e}")
-        # Si falló en CUDA, reintentar faster-whisper en CPU
-        if device == "cuda":
-            try:
-                from faster_whisper import WhisperModel
-                log.info(f"Reintentando faster-whisper ({model_name_fw}) en CPU (int8)...")
-                model = WhisperModel(model_name_fw, device="cpu", compute_type="int8", cpu_threads=num_threads)
-                return model, True
-            except Exception as e_cpu:
-                log.warning(f"Fallo faster-whisper en CPU: {e_cpu}")
+    # Lista ordenada de modelos a probar: primero el pedido, luego alternativas descargadas
+    models_to_attempt = [model_name_fw]
+    for alt in ["large-v3-turbo", "turbo", "small", "base", "tiny"]:
+        alt_norm = "large-v3-turbo" if alt in ["turbo", "large-v3-turbo"] else alt
+        if alt_norm not in models_to_attempt and is_model_downloaded(alt):
+            models_to_attempt.append(alt_norm)
 
-    # 2. Fallback a PyTorch Whisper estándar
+    last_error: Exception | None = None
+    for cur_model in models_to_attempt:
+        try:
+            from faster_whisper import WhisperModel
+            log.info(f"Cargando faster-whisper ({cur_model}) en {device} ({selected_compute}, {num_threads} hilos)...")
+            model = WhisperModel(cur_model, device=device, compute_type=selected_compute, cpu_threads=num_threads)
+            return model, True
+        except Exception as e:
+            last_error = e
+            log.warning(f"Fallo faster-whisper ({cur_model}) en {device}: {e}")
+            if device == "cuda":
+                try:
+                    from faster_whisper import WhisperModel
+                    log.info(f"Reintentando faster-whisper ({cur_model}) en CPU (int8)...")
+                    model = WhisperModel(cur_model, device="cpu", compute_type="int8", cpu_threads=num_threads)
+                    return model, True
+                except Exception as e_cpu:
+                    last_error = e_cpu
+                    log.warning(f"Fallo faster-whisper ({cur_model}) en CPU: {e_cpu}")
+
+    # 2. Fallback a PyTorch Whisper estándar si está instalado (entorno dev)
     try:
-        try:
-            import stable_whisper as whisper
-        except ImportError:
-            import whisper
-        target_dev = device
-        try:
-            log.info(f"Cargando PyTorch Whisper ({model_name_std}) en {target_dev}...")
-            model = whisper.load_model(model_name_std, device=target_dev)
-            return model, False
-        except Exception as e_std:
-            if target_dev == "cuda":
-                log.warning(f"Fallo PyTorch Whisper en CUDA ({e_std}). Reintentando en CPU...")
-                model = whisper.load_model(model_name_std, device="cpu")
-                return model, False
-            raise e_std
-    except Exception as e:
-        log.error(f"Error crítico al cargar {model_name}: {e}")
-        raise RuntimeError(f"Error al cargar el modelo Whisper ({model_name}): {e}")
+        import stable_whisper as sw_module
+        log.info(f"Cargando PyTorch stable_whisper ({model_name_std}) en {device}...")
+        return sw_module.load_model(model_name_std, device=device), False
+    except (ImportError, Exception):
+        pass
+
+    try:
+        import whisper as openai_whisper_module
+        log.info(f"Cargando PyTorch Whisper ({model_name_std}) en {device}...")
+        return openai_whisper_module.load_model(model_name_std, device=device), False
+    except (ImportError, Exception):
+        pass
+
+    raise RuntimeError(
+        f"No se pudo cargar ningún modelo Whisper disponible en disco (último error: {last_error})"
+    )
 
 
 def resolve_local_binary(binary_name: str) -> str | None:
