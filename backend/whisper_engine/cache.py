@@ -47,7 +47,7 @@ def _faster_whisper_cache_folders(model_name: str) -> list[str]:
     if model_name in ("turbo", "large-v3-turbo"):
         return [
             "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo",
-            "models--Systran--faster-whisper-large-v3-turbo",
+            "models--deepdml--faster-whisper-large-v3-turbo-ct2",
         ]
     if model_name == "large-v3":
         return ["models--Systran--faster-whisper-large-v3"]
@@ -58,7 +58,7 @@ def _snapshot_has_weights(snapshot_path: str) -> bool:
     """Verifica si un snapshot de faster-whisper contiene model.bin con pesos válidos (> 10MB)."""
     try:
         bin_path = os.path.join(snapshot_path, "model.bin")
-        if not os.path.exists(bin_path):
+        if not (os.path.exists(bin_path) or os.path.lexists(bin_path)):
             return False
 
         candidate_paths = [bin_path]
@@ -98,6 +98,19 @@ def _snapshot_has_weights(snapshot_path: str) -> bool:
                     return True
         except (OSError, PermissionError):
             pass
+
+        # 4. En Windows NTFS: si model.bin existe en el snapshot y la carpeta blobs/ tiene el archivo > 10MB
+        model_repo_dir = os.path.dirname(os.path.dirname(snapshot_path))
+        blobs_dir = os.path.join(model_repo_dir, "blobs")
+        if os.path.isdir(blobs_dir):
+            try:
+                for blob_name in os.listdir(blobs_dir):
+                    blob_file = os.path.join(blobs_dir, blob_name)
+                    if os.path.isfile(blob_file) and not blob_name.endswith((".incomplete", ".tmp")):
+                        if os.path.getsize(blob_file) > 10 * 1024 * 1024:
+                            return True
+            except OSError:
+                pass
 
         return False
     except Exception:
@@ -160,7 +173,7 @@ def _model_repo_ids(model_name: str) -> list[str]:
     if model_name in ("turbo", "large-v3-turbo"):
         return [
             "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-            "Systran/faster-whisper-large-v3-turbo",
+            "deepdml/faster-whisper-large-v3-turbo-ct2",
         ]
     return [f"Systran/faster-whisper-{model_name}"]
 
