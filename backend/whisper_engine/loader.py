@@ -158,18 +158,57 @@ def _faster_whisper_cache_folders(model_name: str) -> list[str]:
 
 
 def _snapshot_has_weights(snapshot_path: str) -> bool:
+    """Verifica si un snapshot de faster-whisper contiene model.bin con pesos válidos (> 10MB)."""
     try:
         bin_path = os.path.join(snapshot_path, "model.bin")
-        # faster-whisper/CTranslate2 exige model.bin real (> 10MB).
-        # Un .pt de OpenAI Whisper, un .safetensors o un snapshot con solo metadatos
-        # o stubs Git LFS no es suficiente.
-        return os.path.isfile(bin_path) and os.path.getsize(bin_path) > 10 * 1024 * 1024
-    except OSError:
+        if not os.path.exists(bin_path):
+            return False
+
+        candidate_paths = [bin_path]
+
+        # 1. Resolver enlace simbólico relativo si existe (típico de HuggingFace en Windows)
+        try:
+            if os.path.islink(bin_path):
+                link_target = os.readlink(bin_path)
+                if not os.path.isabs(link_target):
+                    candidate_paths.append(os.path.normpath(os.path.join(snapshot_path, link_target)))
+                else:
+                    candidate_paths.append(link_target)
+        except Exception:
+            pass
+
+        try:
+            real_path = os.path.realpath(bin_path)
+            candidate_paths.append(real_path)
+        except Exception:
+            pass
+
+        # 2. Verificar tamaño > 10MB en cualquiera de las rutas candidatas
+        for path_to_check in dict.fromkeys(candidate_paths):
+            try:
+                if os.path.isfile(path_to_check):
+                    size = os.path.getsize(path_to_check)
+                    if size > 10 * 1024 * 1024:
+                        return True
+            except OSError:
+                pass
+
+        # 3. Apertura binaria directa para sortear particularidades de reparse points en NTFS
+        try:
+            with open(bin_path, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                if f.tell() > 10 * 1024 * 1024:
+                    return True
+        except (OSError, PermissionError):
+            pass
+
+        return False
+    except Exception:
         return False
 
 
 def _clear_incomplete_faster_cache(model_name: str) -> None:
-    """Quita solo snapshots incompletos para que HF pueda reanudar la descarga."""
+    """Quita únicamente snapshots vacíos o corruptos sin destruir la carpeta de blobs."""
     for cache_dir in _huggingface_cache_dirs():
         for folder in _faster_whisper_cache_folders(model_name):
             model_folder_path = os.path.join(cache_dir, folder)
@@ -184,19 +223,18 @@ def _clear_incomplete_faster_cache(model_name: str) -> None:
                 ]
                 for snapshot in snapshots:
                     if not _snapshot_has_weights(snapshot):
-                        log.warning(f"Snapshot Whisper incompleto detectado; se eliminara para reanudar descarga: {snapshot}")
-                        shutil.rmtree(snapshot, ignore_errors=True)
-
-                # Si no queda ningún snapshot válido con model.bin en la carpeta del modelo,
-                # purgar toda la carpeta para eliminar blobs corruptos o locks huérfanos que
-                # provocan que HF crea erróneamente que los pesos ya existen.
-                remaining = [
-                    s for s in os.listdir(snapshots_dir)
-                    if os.path.isdir(os.path.join(snapshots_dir, s)) and _snapshot_has_weights(os.path.join(snapshots_dir, s))
-                ]
-                if not remaining:
-                    log.warning(f"Caché Whisper sin snapshots válidos; purgando carpeta completa: {model_folder_path}")
-                    shutil.rmtree(model_folder_path, ignore_errors=True)
+                        # Si tiene archivos temporales de descarga activa, no interrumpir
+                        has_temp = False
+                        try:
+                            has_temp = any(
+                                f.endswith(".incomplete") or f.endswith(".tmp") or f.startswith("tmp")
+                                for f in os.listdir(snapshot)
+                            )
+                        except OSError:
+                            pass
+                        if not has_temp:
+                            log.warning(f"Snapshot Whisper incompleto detectado; limpiando snapshot: {snapshot}")
+                            shutil.rmtree(snapshot, ignore_errors=True)
             except OSError as exc:
                 log.warning(f"No se pudo reparar la caché Whisper '{snapshots_dir}': {exc}")
 
@@ -417,7 +455,7 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
         except Exception as e:
             last_error = e
             log.warning(f"Fallo faster-whisper ({cur_model}) en {device}: {e}")
-            if device == "cuda":
+            if device == "cuda" and (is_model_downloaded(cur_model) or _snapshot_has_weights(model_source)):
                 try:
                     from faster_whisper import WhisperModel
                     log.info(f"Reintentando faster-whisper ({cur_model}) en CPU (int8)...")
