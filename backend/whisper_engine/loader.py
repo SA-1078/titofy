@@ -86,6 +86,67 @@ def detect_device() -> tuple[str, str]:
     return "cpu", "CPU"
 
 
+def _huggingface_cache_dirs() -> list[str]:
+    """Obtiene todas las ubicaciones de caché que puede usar HuggingFace en Windows."""
+    dirs: list[str] = []
+    for env_name in ("HUGGINGFACE_HUB_CACHE", "HF_HOME", "TRANSFORMERS_CACHE"):
+        value = os.environ.get(env_name)
+        if value:
+            dirs.append(os.path.join(value, "hub") if env_name == "HF_HOME" else value)
+    try:
+        from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+        dirs.append(HUGGINGFACE_HUB_CACHE)
+    except Exception:
+        pass
+    dirs.append(os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub"))
+    if os.name == "nt":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if local_appdata:
+            dirs.append(os.path.join(local_appdata, "huggingface", "hub"))
+    return list(dict.fromkeys(os.path.abspath(d) for d in dirs))
+
+
+def _faster_whisper_cache_folders(model_name: str) -> list[str]:
+    """Devuelve repositorios conocidos para un alias de faster-whisper."""
+    fw_name = "large-v3-turbo" if model_name in ("turbo", "large-v3-turbo") else model_name
+    folders = [f"models--Systran--faster-whisper-{fw_name}"]
+    # El alias large-v3-turbo también se publica bajo este repositorio.
+    if fw_name == "large-v3-turbo":
+        folders.append("models--mobiuslabsgmbh--faster-whisper-large-v3-turbo")
+    return folders
+
+
+def _snapshot_has_weights(snapshot_path: str) -> bool:
+    try:
+        return any(
+            f.startswith("model") and f.endswith((".bin", ".safetensors"))
+            for f in os.listdir(snapshot_path)
+        )
+    except OSError:
+        return False
+
+
+def _clear_incomplete_faster_cache(model_name: str) -> None:
+    """Quita solo snapshots incompletos para que HF pueda reanudar la descarga."""
+    for cache_dir in _huggingface_cache_dirs():
+        for folder in _faster_whisper_cache_folders(model_name):
+            snapshots_dir = os.path.join(cache_dir, folder, "snapshots")
+            if not os.path.isdir(snapshots_dir):
+                continue
+            try:
+                snapshots = [
+                    os.path.join(snapshots_dir, entry)
+                    for entry in os.listdir(snapshots_dir)
+                    if os.path.isdir(os.path.join(snapshots_dir, entry))
+                ]
+                if snapshots and not any(_snapshot_has_weights(s) for s in snapshots):
+                    for snapshot in snapshots:
+                        log.warning(f"Snapshot Whisper incompleto detectado; se eliminara para reanudar descarga: {snapshot}")
+                        shutil.rmtree(snapshot, ignore_errors=True)
+            except OSError as exc:
+                log.warning(f"No se pudo reparar la caché Whisper '{snapshots_dir}': {exc}")
+
+
 def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     """Verifica si el modelo Whisper ya está en la caché local."""
     try:
@@ -100,30 +161,20 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
     if use_faster:
-        cache_dirs = []
-        try:
-            from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
-            cache_dirs.append(HUGGINGFACE_HUB_CACHE)
-        except Exception:
-            pass
-        cache_dirs.append(os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub"))
-        if os.name == "nt":
-            local_appdata = os.environ.get("LOCALAPPDATA")
-            if local_appdata:
-                cache_dirs.append(os.path.join(local_appdata, "huggingface", "hub"))
-        fw_folder = f"models--Systran--faster-whisper-{fw_name}"
+        cache_dirs = _huggingface_cache_dirs()
+        fw_folders = _faster_whisper_cache_folders(model_name)
         for cdir in cache_dirs:
-            target = os.path.join(cdir, fw_folder)
-            if os.path.exists(target):
+            for fw_folder in fw_folders:
+                target = os.path.join(cdir, fw_folder)
+                if not os.path.exists(target):
+                    continue
                 snapshots_dir = os.path.join(target, "snapshots")
                 if os.path.exists(snapshots_dir):
                     try:
                         for s in os.listdir(snapshots_dir):
                             snap_path = os.path.join(snapshots_dir, s)
                             if os.path.isdir(snap_path):
-                                snap_files = os.listdir(snap_path)
-                                # Verificar que realmente contenga model.bin o model.safetensors
-                                if any(f.startswith("model") and f.endswith((".bin", ".safetensors")) for f in snap_files):
+                                if _snapshot_has_weights(snap_path):
                                     return True
                     except Exception:
                         pass
@@ -132,6 +183,16 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
                         return True
                 except Exception:
                     pass
+
+        # No declarar listo un .pt de OpenAI Whisper cuando el runtime
+        # productivo va a intentar cargar faster-whisper/CTranslate2. Esas
+        # cachés son formatos distintos y provocan el falso positivo que deja
+        # pasar un modelo sin model.bin hasta la fase de alineación.
+        try:
+            import faster_whisper  # noqa: F401
+            return False
+        except ImportError:
+            pass
 
     import importlib
     download_root = os.getenv(
@@ -212,6 +273,10 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     last_error: Exception | None = None
     for cur_model in models_to_attempt:
         try:
+            # faster-whisper puede reutilizar un snapshot roto sin volver a
+            # descargar los pesos. Limpiarlo permite que HF lo reconstruya.
+            if not is_model_downloaded(cur_model):
+                _clear_incomplete_faster_cache(cur_model)
             from faster_whisper import WhisperModel
             log.info(f"Cargando faster-whisper ({cur_model}) en {device} ({selected_compute}, {num_threads} hilos)...")
             model = WhisperModel(cur_model, device=device, compute_type=selected_compute, cpu_threads=num_threads)
