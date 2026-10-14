@@ -2,7 +2,7 @@ name: titofy
 description: "Titofy 1.0 — Reproductor multimedia con IA local para transcripción y karaoke sincronizado."
 publish_to: 'none'
 
-version: 1.0.0+1
+version: 1.0.14+14
 
 environment:
   sdk: ^3.12.2

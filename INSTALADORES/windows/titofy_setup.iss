@@ -1,16 +1,19 @@
 ; Script de Inno Setup para Titofy en Windows
-; Genera: Titofy-Setup-v1.0.0.exe
+; Genera: Titofy-Setup-v1.0.X.exe
 
 #define MyAppName "Titofy"
-#define MyAppVersion "1.0.0"
+#ifndef MyAppVersion
+#define MyAppVersion "1.0.14"
+#endif
 #define MyAppPublisher "Titofy Team"
-#define MyAppURL "https://github.com/tu-usuario/titofy"
+#define MyAppURL "https://github.com/SA-1078/titofy"
 #define MyAppExeName "titofy.exe"
 
 [Setup]
 AppId={{9F4A4E5C-3C73-4BD9-9A61-2A1B1C8E9D01}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+VersionInfoVersion={#MyAppVersion}.0
 AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
@@ -24,7 +27,10 @@ LicenseFile=..\..\LICENSE
 InfoBeforeFile=info_instalacion.txt
 InfoAfterFile=info_final.txt
 OutputDir=.
-OutputBaseFilename=Titofy-Setup-v1.0.0
+#ifndef OutputBaseFilename
+#define OutputBaseFilename "Titofy-Setup-v" + MyAppVersion
+#endif
+OutputBaseFilename={#OutputBaseFilename}
 SetupIconFile=..\..\desktop\windows\runner\resources\app_icon.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2/ultra64

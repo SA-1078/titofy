@@ -29,7 +29,7 @@ jobs:
       - name: Compilar Release de Flutter para Windows
         run: |
           cd desktop
-          flutter build windows --release
+          flutter build windows --release --build-name=1.0.${{ github.run_number }} --build-number=${{ github.run_number }}
 
       - name: Configurar Python
         uses: actions/setup-python@v5
@@ -69,13 +69,13 @@ jobs:
       - name: Instalar Inno Setup
         run: choco install innosetup -y
 
-      - name: Compilar instalador Titofy-Setup-v1.0.13.exe
+      - name: Compilar instalador Titofy-Setup-v1.0.${{ github.run_number }}.exe
         run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" INSTALADORES\windows\titofy_setup.iss
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DMyAppVersion="1.0.${{ github.run_number }}" /DOutputBaseFilename="Titofy-Setup-v1.0.${{ github.run_number }}" INSTALADORES\windows\titofy_setup.iss
 
       - name: Subir Instalador como Artefacto
         uses: actions/upload-artifact@v4
         with:
-          name: Titofy-Setup-v1.0.13
-          path: INSTALADORES/windows/Titofy-Setup-v1.0.13.exe
+          name: Titofy-Setup-v1.0.${{ github.run_number }}
+          path: INSTALADORES/windows/Titofy-Setup-v1.0.${{ github.run_number }}.exe
           if-no-files-found: error
