@@ -20,16 +20,41 @@ const path = require("path");
 // ─── Detectar modelos descargados localmente (caché HF) ──────────────────────
 
 function getLocalDownloaded() {
-  const hfCache = path.join(os.homedir(), ".cache", "huggingface", "hub");
   const downloaded = new Set();
-  if (!fs.existsSync(hfCache)) return downloaded;
-  try {
-    for (const entry of fs.readdirSync(hfCache)) {
-      // Formato: models--Systran--faster-whisper-base
-      const match = entry.match(/^models--Systran--(faster-whisper-.+)$/);
-      if (match) downloaded.add(match[1]);
-    }
-  } catch { /* sin acceso */ }
+  const cacheDirs = [
+    process.env.HUGGINGFACE_HUB_CACHE,
+    process.env.HF_HUB_CACHE,
+    process.env.HF_HOME ? path.join(process.env.HF_HOME, "hub") : null,
+    process.env.TRANSFORMERS_CACHE,
+    path.join(os.homedir(), ".cache", "huggingface", "hub"),
+    process.platform === "win32" && process.env.LOCALAPPDATA
+      ? path.join(process.env.LOCALAPPDATA, "huggingface", "hub")
+      : null,
+  ].filter(Boolean);
+
+  for (const hfCache of [...new Set(cacheDirs)]) {
+    if (!fs.existsSync(hfCache)) continue;
+    try {
+      for (const entry of fs.readdirSync(hfCache)) {
+        // faster-whisper/CTranslate2 necesita pesos model.bin reales.
+        const match = entry.match(/^models--(?:Systran|mobiuslabsgmbh)--(faster-whisper-.+)$/);
+        if (!match) continue;
+
+        const snapshotsDir = path.join(hfCache, entry, "snapshots");
+        if (!fs.existsSync(snapshotsDir)) continue;
+
+        const complete = fs.readdirSync(snapshotsDir).some((snapshot) => {
+          const modelBin = path.join(snapshotsDir, snapshot, "model.bin");
+          try {
+            return fs.statSync(modelBin).isFile() && fs.statSync(modelBin).size > 10 * 1024 * 1024;
+          } catch {
+            return false;
+          }
+        });
+        if (complete) downloaded.add(match[1]);
+      }
+    } catch { /* sin acceso */ }
+  }
   return downloaded;
 }
 

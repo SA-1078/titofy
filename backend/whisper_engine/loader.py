@@ -89,7 +89,7 @@ def detect_device() -> tuple[str, str]:
 def _huggingface_cache_dirs() -> list[str]:
     """Obtiene todas las ubicaciones de caché que puede usar HuggingFace en Windows."""
     dirs: list[str] = []
-    for env_name in ("HUGGINGFACE_HUB_CACHE", "HF_HOME", "TRANSFORMERS_CACHE"):
+    for env_name in ("HUGGINGFACE_HUB_CACHE", "HF_HUB_CACHE", "HF_HOME", "TRANSFORMERS_CACHE"):
         value = os.environ.get(env_name)
         if value:
             dirs.append(os.path.join(value, "hub") if env_name == "HF_HOME" else value)
@@ -108,20 +108,23 @@ def _huggingface_cache_dirs() -> list[str]:
 
 def _faster_whisper_cache_folders(model_name: str) -> list[str]:
     """Devuelve repositorios conocidos para un alias de faster-whisper."""
-    fw_name = "large-v3-turbo" if model_name in ("turbo", "large-v3-turbo") else model_name
-    folders = [f"models--Systran--faster-whisper-{fw_name}"]
-    # El alias large-v3-turbo también se publica bajo este repositorio.
-    if fw_name == "large-v3-turbo":
-        folders.append("models--mobiuslabsgmbh--faster-whisper-large-v3-turbo")
-    return folders
+    if model_name in ("turbo", "large-v3-turbo"):
+        return [
+            "models--mobiuslabsgmbh--faster-whisper-large-v3-turbo",
+            "models--Systran--faster-whisper-large-v3-turbo",
+        ]
+    if model_name == "large-v3":
+        return ["models--Systran--faster-whisper-large-v3"]
+    return [f"models--Systran--faster-whisper-{model_name}"]
 
 
 def _snapshot_has_weights(snapshot_path: str) -> bool:
     try:
-        return any(
-            f.startswith("model") and f.endswith((".bin", ".safetensors"))
-            for f in os.listdir(snapshot_path)
-        )
+        bin_path = os.path.join(snapshot_path, "model.bin")
+        # faster-whisper/CTranslate2 exige model.bin real (> 10MB).
+        # Un .pt de OpenAI Whisper, un .safetensors o un snapshot con solo metadatos
+        # o stubs Git LFS no es suficiente.
+        return os.path.isfile(bin_path) and os.path.getsize(bin_path) > 10 * 1024 * 1024
     except OSError:
         return False
 
@@ -139,8 +142,8 @@ def _clear_incomplete_faster_cache(model_name: str) -> None:
                     for entry in os.listdir(snapshots_dir)
                     if os.path.isdir(os.path.join(snapshots_dir, entry))
                 ]
-                if snapshots and not any(_snapshot_has_weights(s) for s in snapshots):
-                    for snapshot in snapshots:
+                for snapshot in snapshots:
+                    if not _snapshot_has_weights(snapshot):
                         log.warning(f"Snapshot Whisper incompleto detectado; se eliminara para reanudar descarga: {snapshot}")
                         shutil.rmtree(snapshot, ignore_errors=True)
             except OSError as exc:
@@ -148,7 +151,7 @@ def _clear_incomplete_faster_cache(model_name: str) -> None:
 
 
 def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
-    """Verifica si el modelo Whisper ya está en la caché local."""
+    """Verifica si el modelo Whisper ya está en la caché local con pesos completos."""
     try:
         from lyric_config import get_config
         cfg = get_config()
@@ -157,7 +160,6 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     except Exception:
         pass
 
-    fw_name = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
     std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
     if use_faster:
@@ -179,7 +181,7 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
                     except Exception:
                         pass
                 try:
-                    if any(f.startswith("model") and f.endswith((".bin", ".safetensors")) for f in os.listdir(target)):
+                    if _snapshot_has_weights(target):
                         return True
                 except Exception:
                     pass
@@ -211,7 +213,63 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
 
     expected_filename = url.split("/")[-1]
     model_path = os.path.join(download_root, expected_filename)
-    return os.path.exists(model_path)
+    return os.path.exists(model_path) and os.path.getsize(model_path) > 10 * 1024 * 1024
+
+
+def _model_repo_ids(model_name: str) -> list[str]:
+    """Repositorios HuggingFace oficiales/compatibles para el alias solicitado."""
+    if model_name == "large-v3":
+        return ["Systran/faster-whisper-large-v3"]
+    if model_name in ("turbo", "large-v3-turbo"):
+        return [
+            "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+            "Systran/faster-whisper-large-v3-turbo",
+        ]
+    return [f"Systran/faster-whisper-{model_name}"]
+
+
+def fix_loader(model_name: str) -> bool:
+    """Repara o descarga un modelo faster-whisper antes de cargarlo.
+
+    Retorna True únicamente cuando existe un snapshot que contiene model.bin (> 10MB).
+    La reparación es deliberadamente limitada a snapshots incompletos; no
+    borra modelos válidos ni otros archivos de la caché del usuario.
+    """
+    if is_model_downloaded(model_name):
+        return True
+
+    _clear_incomplete_faster_cache(model_name)
+
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        log.warning(f"huggingface_hub no está disponible para descargar '{model_name}': {exc}")
+        return False
+
+    cache_dirs = _huggingface_cache_dirs()
+    # Preferir la caché configurada por HF; si no existe, usar la primera
+    # ubicación estándar. snapshot_download crea el árbol necesario.
+    cache_dir = cache_dirs[0] if cache_dirs else None
+    last_error: Exception | None = None
+    for repo_id in _model_repo_ids(model_name):
+        try:
+            log.info(f"Modelo '{model_name}' no está completo. Descargando pesos desde {repo_id}...")
+            snapshot_download(
+                repo_id=repo_id,
+                cache_dir=cache_dir,
+                local_files_only=False,
+                max_workers=2,
+            )
+            if is_model_downloaded(model_name):
+                log.info(f"Modelo '{model_name}' reparado y verificado: model.bin encontrado.")
+                return True
+        except Exception as exc:
+            last_error = exc
+            log.warning(f"No se pudo descargar '{repo_id}': {exc}")
+
+    if last_error:
+        log.error(f"No se pudo reparar/descargar el modelo '{model_name}': {last_error}")
+    return False
 
 
 def is_any_model_downloaded() -> bool:
@@ -270,13 +328,22 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
         if alt_norm not in models_to_attempt and is_model_downloaded(alt):
             models_to_attempt.append(alt_norm)
 
+    # Si el modelo pedido no está descargado pero hay otro modelo válido en disco,
+    # priorizar el que ya está listo para evitar descargas innecesarias y latencia
+    if not is_model_downloaded(model_name_fw):
+        available_alts = [m for m in models_to_attempt if m != model_name_fw and is_model_downloaded(m)]
+        if available_alts:
+            log.info(f"Modelo '{model_name_fw}' no descargado; usando modelo disponible en disco: '{available_alts[0]}'")
+            models_to_attempt = available_alts + [model_name_fw]
+
     last_error: Exception | None = None
     for cur_model in models_to_attempt:
         try:
             # faster-whisper puede reutilizar un snapshot roto sin volver a
             # descargar los pesos. Limpiarlo permite que HF lo reconstruya.
             if not is_model_downloaded(cur_model):
-                _clear_incomplete_faster_cache(cur_model)
+                if not fix_loader(cur_model):
+                    raise RuntimeError(f"Modelo faster-whisper '{cur_model}' no disponible: falta model.bin")
             from faster_whisper import WhisperModel
             log.info(f"Cargando faster-whisper ({cur_model}) en {device} ({selected_compute}, {num_threads} hilos)...")
             model = WhisperModel(cur_model, device=device, compute_type=selected_compute, cpu_threads=num_threads)
