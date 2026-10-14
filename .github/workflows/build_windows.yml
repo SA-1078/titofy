@@ -52,9 +52,13 @@ jobs:
             --hidden-import uvicorn.lifespan.on `
             --hidden-import uvicorn.lifespan.off `
             --hidden-import faster_whisper `
+            --hidden-import music_detector `
+            --paths . `
             --collect-all lyrics `
             --collect-all postprocess `
             --collect-all whisper_engine `
+            --collect-all server `
+            --collect-all cuda `
             --collect-all faster_whisper `
             --collect-all ctranslate2 `
             --collect-all nvidia.cublas `

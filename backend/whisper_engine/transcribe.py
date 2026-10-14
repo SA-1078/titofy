@@ -241,9 +241,12 @@ def transcribe_audio(
         sys.stdout = devnull_stream  # suprimir «Detected Language: ...» de stable-whisper
         model_obj: typing.Any = model
         if is_faster:
-            result = model_obj.transcribe(audio_path, progress_callback=progress_callback, **transcribe_kwargs)
-        else:
             result = model_obj.transcribe(audio_path, **transcribe_kwargs)
+        else:
+            try:
+                result = model_obj.transcribe(audio_path, progress_callback=progress_callback, **transcribe_kwargs)
+            except TypeError:
+                result = model_obj.transcribe(audio_path, **transcribe_kwargs)
     except Exception as e:
         sys.stdout = real_stdout
         try:
@@ -280,6 +283,11 @@ def transcribe_audio(
         segments_gen, info = result
         detected_lang = str(getattr(info, "language", language))
         for s in segments_gen:
+            if progress_callback and duration and duration > 0:
+                try:
+                    progress_callback(getattr(s, "end", 0.0), duration)
+                except Exception:
+                    pass
             words = []
             if hasattr(s, "words") and s.words:
                 for w in s.words:
