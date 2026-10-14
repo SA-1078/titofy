@@ -269,16 +269,16 @@ def transcribe_audio(
 
 
 
-    detected_lang = language
-    segments = []
+    detected_lang: str = language
+    segments: list[dict[str, typing.Any]] = []
     if hasattr(result, "to_dict"):
-        result_dict = result.to_dict()
-        detected_lang = result_dict.get("language", language)
-        segments = result_dict.get("segments", [])
+        result_dict = typing.cast(dict[str, typing.Any], result.to_dict())
+        detected_lang = str(result_dict.get("language", language))
+        segments = typing.cast(list[dict[str, typing.Any]], result_dict.get("segments", []))
     elif isinstance(result, tuple) and len(result) == 2:
         # faster-whisper WhisperModel: (segments_generator, info)
         segments_gen, info = result
-        detected_lang = getattr(info, "language", language)
+        detected_lang = str(getattr(info, "language", language))
         for s in segments_gen:
             words = []
             if hasattr(s, "words") and s.words:
@@ -298,9 +298,9 @@ def transcribe_audio(
             })
     else:
         try:
-            result_dict = dict(result)
-            detected_lang = result_dict.get("language", language)
-            segments = result_dict.get("segments", [])
+            result_dict = typing.cast(dict[str, typing.Any], dict(result))
+            detected_lang = str(result_dict.get("language", language))
+            segments = typing.cast(list[dict[str, typing.Any]], result_dict.get("segments", []))
         except Exception:
             pass
 
@@ -324,8 +324,8 @@ def transcribe_audio(
         segments = postprocess_segments(segments, similarity_threshold=threshold)
 
     if wcfg.get("classify_music_sections", True) and HAS_MUSIC_DETECTOR:
-        total_dur = duration or (segments[-1]["end"] if segments else 180.0)
-        segments = classify_sections(segments, total_dur)
+        total_dur = float(duration or (segments[-1].get("end", 180.0) if segments else 180.0))
+        segments = typing.cast(list[dict[str, typing.Any]], classify_sections(segments, total_dur))
 
     lrc_lines = [
         f"[ti:{title}]",
@@ -335,18 +335,18 @@ def transcribe_audio(
 
     if word_mode:
         for seg in segments:
-            words = seg.get("words", [])
+            words = typing.cast(list[dict[str, typing.Any]], seg.get("words", []))
             for w in words:
                 text = clean_text(w.get("word", ""), detected_lang)
                 if text:
-                    ts = to_lrc_timestamp(w["start"])
+                    ts = to_lrc_timestamp(float(w["start"]))
                     lrc_lines.append(f"[{ts}]{text}")
     else:
         for seg in segments:
             text = seg["text"].strip()
             if not text:
                 continue
-            parts = split_long_segment(text, seg["start"], seg["end"])
+            parts = split_long_segment(text, float(seg["start"]), float(seg["end"]))
             for (t, part_text) in parts:
                 ts = to_lrc_timestamp(t)
                 lrc_lines.append(f"[{ts}]{part_text}")

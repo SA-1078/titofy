@@ -9,6 +9,7 @@ import os
 import sys
 import shutil
 import subprocess
+import time
 
 # Asegurar que la raíz de backend esté en sys.path
 backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -17,6 +18,9 @@ if backend_dir not in sys.path:
 
 from logger import get_logger
 log = get_logger("whisper.loader")
+
+_repair_failures: dict[str, float] = {}
+_REPAIR_RETRY_SECONDS = 60.0
 
 ANSI_YELLOW = "\033[33m"
 ANSI_RESET = "\033[0m"
@@ -133,7 +137,8 @@ def _clear_incomplete_faster_cache(model_name: str) -> None:
     """Quita solo snapshots incompletos para que HF pueda reanudar la descarga."""
     for cache_dir in _huggingface_cache_dirs():
         for folder in _faster_whisper_cache_folders(model_name):
-            snapshots_dir = os.path.join(cache_dir, folder, "snapshots")
+            model_folder_path = os.path.join(cache_dir, folder)
+            snapshots_dir = os.path.join(model_folder_path, "snapshots")
             if not os.path.isdir(snapshots_dir):
                 continue
             try:
@@ -146,8 +151,36 @@ def _clear_incomplete_faster_cache(model_name: str) -> None:
                     if not _snapshot_has_weights(snapshot):
                         log.warning(f"Snapshot Whisper incompleto detectado; se eliminara para reanudar descarga: {snapshot}")
                         shutil.rmtree(snapshot, ignore_errors=True)
+
+                # Si no queda ningún snapshot válido con model.bin en la carpeta del modelo,
+                # purgar toda la carpeta para eliminar blobs corruptos o locks huérfanos que
+                # provocan que HF crea erróneamente que los pesos ya existen.
+                remaining = [
+                    s for s in os.listdir(snapshots_dir)
+                    if os.path.isdir(os.path.join(snapshots_dir, s)) and _snapshot_has_weights(os.path.join(snapshots_dir, s))
+                ]
+                if not remaining:
+                    log.warning(f"Caché Whisper sin snapshots válidos; purgando carpeta completa: {model_folder_path}")
+                    shutil.rmtree(model_folder_path, ignore_errors=True)
             except OSError as exc:
                 log.warning(f"No se pudo reparar la caché Whisper '{snapshots_dir}': {exc}")
+
+
+def _find_complete_faster_snapshot(model_name: str) -> str | None:
+    """Retorna la ruta exacta de un snapshot usable por CTranslate2."""
+    for cache_dir in _huggingface_cache_dirs():
+        for folder in _faster_whisper_cache_folders(model_name):
+            snapshots_dir = os.path.join(cache_dir, folder, "snapshots")
+            if not os.path.isdir(snapshots_dir):
+                continue
+            try:
+                for entry in os.listdir(snapshots_dir):
+                    snapshot = os.path.join(snapshots_dir, entry)
+                    if os.path.isdir(snapshot) and _snapshot_has_weights(snapshot):
+                        return snapshot
+            except OSError:
+                continue
+    return None
 
 
 def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
@@ -163,28 +196,8 @@ def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
     if use_faster:
-        cache_dirs = _huggingface_cache_dirs()
-        fw_folders = _faster_whisper_cache_folders(model_name)
-        for cdir in cache_dirs:
-            for fw_folder in fw_folders:
-                target = os.path.join(cdir, fw_folder)
-                if not os.path.exists(target):
-                    continue
-                snapshots_dir = os.path.join(target, "snapshots")
-                if os.path.exists(snapshots_dir):
-                    try:
-                        for s in os.listdir(snapshots_dir):
-                            snap_path = os.path.join(snapshots_dir, s)
-                            if os.path.isdir(snap_path):
-                                if _snapshot_has_weights(snap_path):
-                                    return True
-                    except Exception:
-                        pass
-                try:
-                    if _snapshot_has_weights(target):
-                        return True
-                except Exception:
-                    pass
+        if _find_complete_faster_snapshot(model_name):
+            return True
 
         # No declarar listo un .pt de OpenAI Whisper cuando el runtime
         # productivo va a intentar cargar faster-whisper/CTranslate2. Esas
@@ -228,15 +241,16 @@ def _model_repo_ids(model_name: str) -> list[str]:
     return [f"Systran/faster-whisper-{model_name}"]
 
 
-def fix_loader(model_name: str) -> bool:
+def fix_loader(model_name: str) -> str | None:
     """Repara o descarga un modelo faster-whisper antes de cargarlo.
 
-    Retorna True únicamente cuando existe un snapshot que contiene model.bin (> 10MB).
+    Retorna la ruta del snapshot únicamente cuando contiene model.bin (> 10MB).
     La reparación es deliberadamente limitada a snapshots incompletos; no
     borra modelos válidos ni otros archivos de la caché del usuario.
     """
-    if is_model_downloaded(model_name):
-        return True
+    existing_snapshot = _find_complete_faster_snapshot(model_name)
+    if existing_snapshot:
+        return existing_snapshot
 
     _clear_incomplete_faster_cache(model_name)
 
@@ -244,32 +258,41 @@ def fix_loader(model_name: str) -> bool:
         from huggingface_hub import snapshot_download
     except ImportError as exc:
         log.warning(f"huggingface_hub no está disponible para descargar '{model_name}': {exc}")
-        return False
+        return None
 
     cache_dirs = _huggingface_cache_dirs()
     # Preferir la caché configurada por HF; si no existe, usar la primera
     # ubicación estándar. snapshot_download crea el árbol necesario.
     cache_dir = cache_dirs[0] if cache_dirs else None
+    last_failure = _repair_failures.get(model_name)
+    if last_failure and time.monotonic() - last_failure < _REPAIR_RETRY_SECONDS:
+        log.warning(f"Se omite nueva descarga de '{model_name}': fallo de reparación reciente")
+        return None
+
     last_error: Exception | None = None
     for repo_id in _model_repo_ids(model_name):
         try:
             log.info(f"Modelo '{model_name}' no está completo. Descargando pesos desde {repo_id}...")
-            snapshot_download(
+            downloaded_snapshot = snapshot_download(
                 repo_id=repo_id,
                 cache_dir=cache_dir,
                 local_files_only=False,
                 max_workers=2,
+                force_download=True,
             )
-            if is_model_downloaded(model_name):
-                log.info(f"Modelo '{model_name}' reparado y verificado: model.bin encontrado.")
-                return True
+            if _snapshot_has_weights(downloaded_snapshot):
+                log.info(f"Modelo '{model_name}' reparado y verificado: {downloaded_snapshot}")
+                return downloaded_snapshot
+            last_error = RuntimeError(f"HuggingFace terminó sin model.bin usable en {downloaded_snapshot}")
+            log.warning(str(last_error))
         except Exception as exc:
             last_error = exc
             log.warning(f"No se pudo descargar '{repo_id}': {exc}")
 
     if last_error:
         log.error(f"No se pudo reparar/descargar el modelo '{model_name}': {last_error}")
-    return False
+    _repair_failures[model_name] = time.monotonic()
+    return None
 
 
 def is_any_model_downloaded() -> bool:
@@ -338,15 +361,22 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
 
     last_error: Exception | None = None
     for cur_model in models_to_attempt:
+        # Debe existir también si falla la preparación del modelo antes de
+        # entrar al fallback CPU del bloque except.
+        model_source: str = cur_model
         try:
             # faster-whisper puede reutilizar un snapshot roto sin volver a
             # descargar los pesos. Limpiarlo permite que HF lo reconstruya.
             if not is_model_downloaded(cur_model):
-                if not fix_loader(cur_model):
+                repaired_source = fix_loader(cur_model)
+                if repaired_source is None:
                     raise RuntimeError(f"Modelo faster-whisper '{cur_model}' no disponible: falta model.bin")
+                model_source = repaired_source
+            else:
+                model_source = _find_complete_faster_snapshot(cur_model) or cur_model
             from faster_whisper import WhisperModel
-            log.info(f"Cargando faster-whisper ({cur_model}) en {device} ({selected_compute}, {num_threads} hilos)...")
-            model = WhisperModel(cur_model, device=device, compute_type=selected_compute, cpu_threads=num_threads)
+            log.info(f"Cargando faster-whisper ({model_source}) en {device} ({selected_compute}, {num_threads} hilos)...")
+            model = WhisperModel(model_source, device=device, compute_type=selected_compute, cpu_threads=num_threads)
             return model, True
         except Exception as e:
             last_error = e
@@ -355,7 +385,7 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
                 try:
                     from faster_whisper import WhisperModel
                     log.info(f"Reintentando faster-whisper ({cur_model}) en CPU (int8)...")
-                    model = WhisperModel(cur_model, device="cpu", compute_type="int8", cpu_threads=num_threads)
+                    model = WhisperModel(model_source, device="cpu", compute_type="int8", cpu_threads=num_threads)
                     return model, True
                 except Exception as e_cpu:
                     last_error = e_cpu
