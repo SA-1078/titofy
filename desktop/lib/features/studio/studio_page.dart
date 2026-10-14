@@ -227,7 +227,93 @@ class _StudioPageState extends State<StudioPage> {
             _resultSource = displaySource;
             _currentStatusText =
                 '¡Proceso completado! (${_resultLines.length} líneas generadas)';
-kil´pppioioj,ol
+          });
+
+          try {
+            final player = context.read<PlayerService>();
+            if (player.currentTrack != null &&
+                player.currentTrack!.path == _selectedFilePath) {
+              await context.read<LyricsService>().loadForAudio(
+                    player.currentTrack!.path,
+                    title: player.currentTrack!.title,
+                    artist: player.currentTrack!.artist,
+                  );
+            }
+          } catch (_) {}
+        } else {
+          throw Exception('No se obtuvieron resultados para los parámetros seleccionados');
+        }
+      }
+    } catch (e) {
+      if (mounted) {
+        final cleanMsg = _humanizeErrorMessage(e);
+        setState(() {
+          _currentStatusText = 'Error: $cleanMsg';
+          _progressValue = 0.0;
+        });
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isProcessing = false);
+      }
+    }
+  }
+
+  String _humanizeErrorMessage(dynamic error) {
+    final str = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
+    final lower = str.toLowerCase();
+
+    if (lower.contains('socketexception') ||
+        lower.contains('connection refused') ||
+        lower.contains('failed host lookup') ||
+        lower.contains('servidor local no detectado') ||
+        lower.contains('8642')) {
+      return 'No se pudo conectar con el motor local de IA (puerto 8642). Verifica que el backend esté ejecutándose.';
+    }
+    if (lower.contains('timeout') || lower.contains('timed out')) {
+      return 'La operación tardó demasiado tiempo en responder. Si estás transcribiendo un audio largo, intenta con un modelo más rápido (como "base").';
+    }
+    if (lower.contains('cuda out of memory') || lower.contains('out of memory')) {
+      return 'La memoria de tu tarjeta gráfica (VRAM) se ha agotado. Selecciona un modelo más ligero (ej. base o small) o usa CPU.';
+    }
+    if (lower.contains('cuda') || lower.contains('cublas') || lower.contains('cudnn')) {
+      return 'Error de aceleración CUDA: $str. Puedes cambiar a CPU en la configuración si el problema persiste.';
+    }
+    if (lower.contains('no se encontraron letras') || lower.contains('404')) {
+      return 'No se encontraron letras en línea para esta canción. Prueba con el modo Whisper IA Local.';
+    }
+    return str;
+  }
+
+  Future<void> _pollTask(ApiService api, String taskId) async {
+    for (int i = 0; i < 60; i++) {
+      await Future.delayed(const Duration(seconds: 1));
+      if (!mounted) return;
+      final statusData = await api.status(taskId);
+      if (statusData != null) {
+        final st = statusData['status'];
+        final prog = (statusData['progress'] as num?)?.toDouble() ?? 50.0;
+
+        if (mounted) {
+          setState(() {
+            _progressValue = (prog / 100).clamp(0.1, 0.95);
+            _currentStatusText = 'Procesando en segundo plano ($st: ${prog.toInt()}%)...';
+          });
+        }
+
+        if (st == 'done') {
+          if (mounted) {
+            setState(() {
+              _progressValue = 1.0;
+              _currentStatusText = '¡Alineación completada exitosamente!';
+            });
+          }
+          break;
+        } else if (st == 'error') {
+          throw Exception(statusData['error'] ?? 'Fallo desconocido en la tarea');
+        }
+      }
+    }
   }
 
   @override
