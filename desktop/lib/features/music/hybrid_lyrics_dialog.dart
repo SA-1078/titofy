@@ -44,6 +44,7 @@ class _HybridLyricsDialogState extends State<HybridLyricsDialog> {
   Future<void> _runHybridResolution() async {
     final api = context.read<ApiService>();
     final lyricsService = context.read<LyricsService>();
+    final playerPosition = context.read<PlayerService>().position;
 
     setState(() {
       _step = 'Paso 1/3: Verificando conexión con el motor de IA...';
@@ -74,12 +75,12 @@ class _HybridLyricsDialogState extends State<HybridLyricsDialog> {
         duration: widget.track.duration.inSeconds.toDouble(),
         audioPath: widget.track.path,
         outputPath: null,
-        mode: 'auto',
+        mode: 'online_align',
         force: true,
       );
 
       if (res != null && res['lines'] != null && (res['lines'] as List).isNotEmpty) {
-        final lines = res['lines'] as List;
+        _lineCount = (res['lines'] as List).length;
         final src = res['source']?.toString().toLowerCase() ?? '';
         final prov = res['provider']?.toString() ?? '';
         if (src == 'online_aligned' || prov.contains('Alineada') || prov.toLowerCase().contains('calibrado')) {
@@ -103,12 +104,10 @@ class _HybridLyricsDialogState extends State<HybridLyricsDialog> {
           _detail = 'Se obtuvieron $_lineCount versos sincronizados y alineados con el audio.\nFuente: $_source\nGuardado en: biblioteca de letras (.lrc)';
         });
 
-        // Recargar letras en el servicio de reproducción
-        await lyricsService.loadForAudio(
-          widget.track.path,
-          artist: widget.track.artist,
-          title: widget.track.title,
-        );
+        // Aplicar exactamente la respuesta alineada. No recargar desde disco:
+        // allí puede existir el LRC online antiguo y pisar la calibración.
+        lyricsService.applyResolvedResponse(res);
+        lyricsService.updatePosition(playerPosition);
       } else {
         // Fallback a Whisper puro local si no hubo letras online
         setState(() {

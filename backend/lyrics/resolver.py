@@ -141,7 +141,13 @@ class LyricsResolver:
                                     self._save_lrc_if_requested(aligned, output_lrc, audio_path, force=force)
                                     return aligned
                             except Exception as e:
-                                log.warning(f"[Titofy] Calibración con audio falló ({e}). Retornando letra sincronizada directa.")
+                                log.warning(f"[Titofy] Calibración con audio falló ({e}).")
+                                # Un modo explícito de alineación nunca debe degradar
+                                # silenciosamente a los timestamps de Internet.
+                                if mode in ("online_align", "hybrid"):
+                                    continue
+                            if mode in ("online_align", "hybrid"):
+                                continue
                         self._save_lrc_if_requested(res, output_lrc, audio_path, force=force)
                         return res
 
@@ -176,6 +182,11 @@ class LyricsResolver:
                                 return aligned
                         except Exception as e:
                             log.warning(f"Forced Alignment Nivel 2 falló ({e}).")
+                            if mode in ("online_align", "hybrid"):
+                                continue
+
+                    if should_align and mode in ("online_align", "hybrid"):
+                        continue
 
                     self._save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
                     return pres
