@@ -12,62 +12,86 @@ import sys
 
 def setup_cuda_dlls():
     """
-    Solución de Carga de DLLs para Windows CUDA y PyAV (Python 3.8+)
-    Agrega los directorios binarios de las dependencias nvidia y PyAV locales de la venv
-    o del sistema al PATH de DLLs de Windows.
+    Solución de Carga de DLLs para Windows CUDA, cuBLAS, cuDNN y PyAV.
+    Agrega directorios binarios de PyInstaller (_MEIPASS), entornos virtuales,
+    paquetes locales nvidia y CUDA_PATH al PATH de DLLs de Windows.
     """
     os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
 
     if os.name == "nt":
-        # 1. Obtener la raíz del entorno virtual (.venv)
+        candidates: list[str] = []
+        if getattr(sys, "frozen", False):
+            base_dir = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+            candidates.append(base_dir)
+            candidates.append(os.path.dirname(sys.executable))
+        else:
+            backend_dir = os.path.dirname(os.path.abspath(__file__))
+            candidates.append(backend_dir)
+
         venv_root = os.path.dirname(os.path.dirname(sys.executable))
         site_packages = os.path.join(venv_root, "Lib", "site-packages")
-
         if os.path.exists(site_packages):
-            # 2. Agregar paths de bibliotecas nvidia locales de la venv
+            candidates.append(site_packages)
+
+        for base in list(candidates):
             for pkg in ["cublas", "cudnn", "cuda_nvrtc", "cuda_runtime"]:
-                bin_dir = os.path.join(site_packages, "nvidia", pkg, "bin")
-                if os.path.exists(bin_dir):
-                    try:
-                        os.add_dll_directory(bin_dir)
-                    except Exception:
-                        pass
+                candidates.append(os.path.join(base, "nvidia", pkg, "bin"))
+                candidates.append(os.path.join(base, pkg, "bin"))
+                candidates.append(os.path.join(base, "nvidia", pkg))
+            candidates.append(os.path.join(base, "av.libs"))
 
-            # 3. Agregar path de PyAV (av.libs)
-            av_libs = os.path.join(site_packages, "av.libs")
-            if os.path.exists(av_libs):
-                try:
-                    os.add_dll_directory(av_libs)
-                except Exception:
-                    pass
-
-        # 4. Agregar paths de CUDA en el sistema si existen
         cuda_path = os.environ.get("CUDA_PATH")
         if cuda_path:
-            bin_dir = os.path.join(cuda_path, "bin")
-            if os.path.exists(bin_dir):
-                try:
-                    os.add_dll_directory(bin_dir)
-                except Exception:
-                    pass
+            candidates.append(os.path.join(cuda_path, "bin"))
+
+        for d in dict.fromkeys(os.path.abspath(p) for p in candidates if os.path.isdir(p)):
+            try:
+                os.add_dll_directory(d)
+            except Exception:
+                pass
+            cur_path = os.environ.get("PATH", "")
+            if d not in cur_path:
+                os.environ["PATH"] = d + os.pathsep + cur_path
+
+
+def _get_nvidia_gpu_name() -> str:
+    """Intenta obtener el nombre comercial de la GPU mediante nvidia-smi."""
+    try:
+        import subprocess
+        out = subprocess.check_output(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            text=True,
+            timeout=2,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        first_line = out.strip().splitlines()[0]
+        if first_line:
+            return first_line.strip()
+    except Exception:
+        pass
+    return "NVIDIA CUDA GPU"
 
 
 def detect_device() -> tuple[str, str]:
     """
     Detecta automáticamente si hay GPU CUDA disponible y FUNCIONAL.
-    Verifica que el driver responda adecuadamente. Si el usuario cambió o tiene
-    problemas con drivers NVIDIA, hace fallback transparente y seguro a CPU
-    sin detener la aplicación ni requerir cambios manuales.
-    Returns: (device, device_name)
-      - ("cuda", "NVIDIA GeForce RTX ...") si GPU y driver están operativos
-      - ("cpu", "CPU") si no hay GPU o si el driver falló
+    Prioriza CTranslate2 (faster-whisper) y luego PyTorch si está instalado.
     """
+    setup_cuda_dlls()
+
+    try:
+        import ctranslate2
+        if ctranslate2.get_cuda_device_count() > 0:
+            name = _get_nvidia_gpu_name()
+            return "cuda", name
+    except Exception:
+        pass
+
     try:
         import torch
         if torch.cuda.is_available():
             torch.cuda.init()
             if torch.cuda.device_count() > 0:
-                # Verificación activa con tensor pequeño para garantizar que el driver responde
                 _ = torch.zeros(1, device="cuda")
                 name = torch.cuda.get_device_name(0)
                 return "cuda", name

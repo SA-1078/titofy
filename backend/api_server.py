@@ -468,9 +468,13 @@ async def list_models():
 def _download_worker(model_name: str):
     try:
         _model_download_status[model_name] = {"status": "downloading", "error": None}
+        from whisper_engine.loader import fix_loader
+        snapshot = fix_loader(model_name)
+        if not snapshot:
+            raise RuntimeError(f"No se pudo descargar o verificar los pesos del modelo '{model_name}'.")
         _get_model(model_name)
         _model_download_status[model_name] = {"status": "ready", "error": None}
-        log.info(f"Modelo '{model_name}' descargado y verificado en caché.")
+        log.info(f"Modelo '{model_name}' descargado y verificado en caché ({snapshot}).")
     except Exception as e:
         log.error(f"Error descargando modelo '{model_name}': {e}")
         _model_download_status[model_name] = {"status": "error", "error": str(e)}
