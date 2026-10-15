@@ -340,6 +340,18 @@ class LyricsResolver:
 
             if first_vocal_time is not None:
                 offset = round(first_vocal_time - original_start, 2)
+                if abs(offset) >= 3.0:
+                    try:
+                        log.info(
+                            f"[Titofy Calibración] Desfase grande de {offset:+.2f}s. "
+                            "Alineando la letra completa contra el audio local..."
+                        )
+                        aligned = self._align(data, audio_path, model_name, language)
+                        if aligned.is_synced and aligned.lines:
+                            aligned.provider = f"{data.provider} · Alineada con audio"
+                            return aligned
+                    except Exception as exc:
+                        log.warning(f"[Titofy Calibración] Alineación completa falló ({exc}). Usando ajuste global.")
                 if abs(offset) >= 0.6 and abs(offset) <= 60.0:
                     log.info(
                         f"[Titofy Calibración] Desfase detectado de {offset:+.2f}s "

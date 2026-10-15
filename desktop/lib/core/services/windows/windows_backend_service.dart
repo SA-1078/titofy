@@ -31,6 +31,7 @@ class WindowsBackendService {
       final filesToSync = [
         'whisper_engine/transcribe.py',
         'whisper_engine/loader.py',
+        'whisper_engine/cache.py',
         'whisper_engine/align.py',
         'lyrics/resolver.py',
         'server/tasks.py',

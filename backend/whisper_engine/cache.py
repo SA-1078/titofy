@@ -210,14 +210,6 @@ def _model_repo_ids(model_name: str) -> list[str]:
 
 def is_model_downloaded(model_name: str, use_faster: bool = True) -> bool:
     """Verifica si el modelo Whisper ya está en la caché local con pesos completos."""
-    try:
-        from lyric_config import get_config
-        cfg = get_config()
-        if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
-            model_name = "large-v3"
-    except Exception:
-        pass
-
     std_name = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
     if use_faster:

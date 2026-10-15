@@ -82,14 +82,6 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     Carga el modelo Whisper con tolerancia a fallos de GPU/drivers y fallback automático entre modelos.
     Prioriza 'faster-whisper' nativo sin dependencias de PyTorch.
     """
-    try:
-        from lyric_config import get_config
-        cfg = get_config()
-        if model_name in ["turbo", "large-v3-turbo"] and cfg.get("whisper", {}).get("use_large_v3_for_pro", False):
-            model_name = "large-v3"
-    except Exception:
-        pass
-
     model_name_fw = "large-v3-turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
     model_name_std = "turbo" if model_name in ["turbo", "large-v3-turbo"] else model_name
 
