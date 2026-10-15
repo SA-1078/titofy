@@ -3,7 +3,7 @@
 **Titofy** es una herramienta integral para obtener, calibrar, transcribir y reproducir letras de canciones (`.lrc`) sincronizadas con archivos locales de audio, además de incluir visualizadores espectrales reactivos en tiempo real.
 
 Incluye:
-- **App Desktop (Flutter)**: Interfaz gráfica nativa oficial **v1.0** para **Linux** y **Windows** con modo karaoke, Studio IA offline, gestión de listas de reproducción y paleta de colores personalizable.
+- **App Desktop (Flutter)**: Interfaz gráfica nativa oficial **v1.0** para **Linux** y **Windows** que incluye modo karaoke, Studio IA offline, gestión de listas de reproducción y paleta de colores personalizable.
 - **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor (v2.4).
 - **Motor Híbrido & API FastAPI**: Búsqueda remota (LRCLIB / NetEase / Genius), calibración mediante **Forced Alignment** acústico y transcripción offline con **faster-whisper** (CTranslate2) en GPU/CPU.
 - **Instaladores Oficiales**: Paquetes de instalación listos para usar en la carpeta `INSTALADORES/` (`Titofy-Setup-v1.0.X.exe` dinámico para Windows y script de integración nativa para Linux).
@@ -73,38 +73,11 @@ Incluye:
 
 ---
 
-### Normalización de Nombres ([normalizer.py](backend/lyrics/normalizer.py))
+### 🎯 Capacidades Principales del Motor
 
-Limpia metadatos y genera variantes de búsqueda para evitar fallos por nombres de archivos provenientes de rips o YouTube:
-
-1. **Limpieza de etiquetas**: Remueve tags de resolución y tipo (`[Official Video]`, `(1080p)`, `[320kbps]`, `(En Vivo)`, etc.).
-2. **Separación de artistas**: Parsea patrones como `_`, `,`, `&` y `ft.` (`"Silvestre Dangond_ NATTI NATASHA"` ➔ `["Silvestre Dangond", "NATTI NATASHA"]`).
-3. **Generación de consultas ordenadas**:
-   ```text
-   Archivo: "Silvestre Dangond_ NATTI NATASHA - Justicia (Official Video).mp3"
-     1. "Silvestre Dangond" + "Justicia"
-     2. "Silvestre Dangond, NATTI NATASHA" + "Justicia"
-     3. "Silvestre Dangond & NATTI NATASHA" + "Justicia"
-     4. "NATTI NATASHA" + "Justicia"
-     5. "Justicia Silvestre Dangond"
-   ```
-
----
-
-### Alineación de Estrofas ([align.py](backend/whisper_engine/align.py))
-
-Para evitar que Whisper colapse varias líneas cortas en un solo renglón largo por pausas acústicas, el método `map_words_to_original_lines()`:
-- Extrae marcas de tiempo a nivel de palabra.
-- Mapea el inicio del verso al timestamp de la primera palabra detectada, conservando los saltos de línea del texto original.
-- Inserta una etiqueta `[00:00.00] (intro)` y posiciona la primera estrofa exactamente cuando empieza el canto.
-
----
-
-### Manejo de Estado en Disco
-
-- El archivo `.lrc` local junto a la pista es la única referencia del sistema.
-- Se ignoran cachés antiguas si no están marcadas como `online_aligned` o calibradas.
-- La opción de regeneración sobreescribe directamente el archivo `.lrc` existente mediante una nueva consulta o recalibración.
+- 🧹 **Normalización Automática de Metadatos**: Limpieza inteligente de etiquetas de calidad (`[Official Video]`, `1080p`, `320kbps`, `En Vivo`) y detección de colaboraciones multi-artista (`_`, `,`, `&`, `ft.`) para garantizar la máxima tasa de acierto en las fuentes de letras.
+- 🎙️ **Alineación Acústica por Palabra**: Sincronización precisa que conserva los saltos de verso originales del tema sin truncamientos, asignando marcas de tiempo exactas por palabra y detectando intros instrumentales o silencios prolongados.
+- 💾 **Almacenamiento Estándar `.lrc`**: Genera y actualiza directamente archivos `.lrc` universales junto a tus pistas de audio, sin bases de datos propietarias intermedias, 100% compatibles con reproductores de escritorio, móviles y automóviles.
 
 ---
 
@@ -168,27 +141,53 @@ titofy/
 
 ---
 
-## ⚙️ Requisitos
+## 📦 Instalación
 
-- **Node.js**: v18+
-- **Python**: v3.10+ (recomendado 3.11+)
-- **FFmpeg / ffprobe**: v4.4+
-- **Flutter**: v3.19+ (opcional, solo para compilar desktop)
+### 🖥️ Opción 1: App Desktop (Recomendada para Usuarios)
+
+Titofy Desktop incluye la interfaz gráfica nativa oficial, el motor de inteligencia artificial empaquetado de forma autónoma y todas las dependencias necesarias sin requerir configuraciones de terminal ni entornos virtuales.
+
+#### 🪟 Windows (10 / 11)
+1. Descarga el instalador oficial **`Titofy-Setup-v1.0.X.exe`** desde la carpeta [INSTALADORES/windows](INSTALADORES/windows/) o desde los [Releases de GitHub](https://github.com/SA-1078/titofy/releases).
+2. Ejecuta el asistente de instalación paso a paso en español.
+3. El instalador configurará automáticamente el motor autónomo (`api_server.exe`), los accesos directos en el menú inicio y el desinstalador limpio.
+
+#### 🐧 Linux (Ubuntu, Debian, Fedora, Arch)
+1. Clona o descarga el repositorio y ejecuta el script de instalación en un solo comando:
+   ```bash
+   bash INSTALADORES/linux/instalar_linux.sh
+   ```
+2. El script integrará Titofy en el menú de aplicaciones de tu entorno de escritorio (GNOME, KDE, etc.), instalará los íconos oficiales del sistema y registrará el comando global `titofy`.
 
 ---
 
-## 🚀 Instalación
+### 💻 Opción 2: CLI y Entorno de Desarrollo (Terminal)
 
-### 1. Clonar el repositorio
+Para desarrolladores o usuarios que deseen utilizar la interfaz interactiva de terminal (TUI) con visualizador FFT o deseen contribuir al código fuente:
 
+#### 1. Requisitos Previos
+- **Node.js**: v18+
+- **Python**: v3.10+ (recomendado 3.11+)
+- **FFmpeg / ffprobe**: v4.4+
+- **Flutter**: v3.19+ (opcional, solo para compilar la versión desktop desde el código fuente)
+
+#### 2. Dependencias del Sistema (FFmpeg)
 ```bash
-git clone https://github.com/tu-usuario/titofy.git
+# Ubuntu / Debian
+sudo apt update && sudo apt install -y ffmpeg
+
+# Windows (vía winget)
+winget install Gyan.FFmpeg
+```
+
+#### 3. Clonar el Repositorio
+```bash
+git clone https://github.com/SA-1078/titofy.git
 cd titofy
 git checkout 2.4
 ```
 
-### 2. Backend (Python)
-
+#### 4. Configurar el Backend (Python)
 ```bash
 cd backend
 python3 -m venv .venv
@@ -196,40 +195,40 @@ source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 3. CLI (Node.js)
-
+#### 5. Configurar la CLI (Node.js)
 ```bash
 cd ../cli
 npm install
 ```
 
-### 4. Dependencias del sistema (FFmpeg)
+---
 
-```bash
-# Ubuntu / Debian
-sudo apt update && sudo apt install -y ffmpeg
+## 🎮 Modos de Uso
 
-# Windows
-winget install Gyan.FFmpeg
-```
+### 🖥️ App Desktop
+
+1. Abre **Titofy** desde tu menú de inicio o lanzador del sistema (o ejecutando el comando `titofy` en Linux).
+2. **Reproducción & Karaoke**: Añade canciones o carpetas completas a tu biblioteca para reproducir con visualización de letras en tiempo real.
+3. **Sincronización Híbrida**: Si una pista tiene un intro largo de videoclip desfasado, pulsa en el botón de calibración acústica para sincronizar los versos con la voz del cantante al instante.
+4. **IA Studio**: Transcribe pistas offline desde cero seleccionando el modelo Whisper deseado (`base`, `small` o `turbo`) con aceleración automática por GPU.
 
 ---
 
-## 🎮 Uso
+### 💻 CLI Interactiva (Terminal)
 
-Iniciar el menú interactivo:
+Inicia el menú interactivo en tu terminal:
 
 ```bash
 cd cli
 npm start
 ```
 
-Opciones principales:
-- **Escaneo y sincronización**: Búsqueda y descarga automática de `.lrc`.
-- **Transcripción offline**: Selección de modelos Whisper (`base`, `small`, `turbo`).
-- **Forced Alignment**: Alineación de un `.txt` arbitrario contra un audio local.
-- **Reproductor TUI**: Modo clásico de terminal o visualizador FFT de 112 bandas.
-- **Procesamiento por lotes**: Generación desatendida para directorios completos.
+Opciones principales disponibles en la terminal:
+- **Escaneo y sincronización**: Búsqueda y descarga automática de letras `.lrc` para tu biblioteca musical.
+- **Transcripción offline**: Selección y descarga de modelos Whisper (`base`, `small`, `turbo`).
+- **Forced Alignment**: Alineación temporal de un archivo de texto `.txt` contra un audio local.
+- **Reproductor TUI**: Modo karaoke de terminal con scroll continuo o visualizador espectral FFT de 112 bandas reactivo.
+- **Procesamiento por lotes**: Sincronización desatendida para carpetas enteras de música.
 
 ---
 
@@ -265,6 +264,6 @@ Consulta el archivo [LICENSE](LICENSE) para más detalles.
 
 ---
 
-*Titofy v2.4 & Titofy Desktop v1.0 — Letras sincronizadas con la velocidad de la nube y la potencia de tu GPU local.*
+*Titofy v2.4 & Titofy Desktop v1.0 — Letras con la velocidad de la nube y la potencia de tu GPU local.*
 
 Titofy - Santiago Colimba. Todos los derechos reservados ©2026.

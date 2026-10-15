@@ -41,9 +41,6 @@ ln -sfn "$REPO_DIR/backend" "$INSTALL_DIR/backend"
 
 echo "🎨 4. Instalando ícono oficial de la aplicación..."
 ICON_SRC="$REPO_DIR/desktop/assets/images/logo.png"
-if [ ! -f "$ICON_SRC" ]; then
-    ICON_SRC="$REPO_DIR/Logo_app_desktop.jpg"
-fi
 cp "$ICON_SRC" "$ICON_DIR_512/titofy.png" 2>/dev/null || true
 cp "$ICON_SRC" "$ICON_DIR_256/titofy.png" 2>/dev/null || true
 cp "$ICON_SRC" "$PIXMAPS_DIR/titofy.png" 2>/dev/null || true
