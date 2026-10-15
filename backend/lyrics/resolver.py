@@ -100,6 +100,20 @@ class LyricsResolver:
 
         log.info(f"[Titofy Resolver] Resolviendo letra para: '{clean_artist}' - '{clean_title}' (mode={mode}, dur={dur_int}, force={force})")
 
+        # Parche universal en RAM para faster-whisper y WhisperModel
+        try:
+            from faster_whisper import WhisperModel
+            if not getattr(WhisperModel, "_vad_patched", False):
+                _orig_transcribe = WhisperModel.transcribe
+                def _safe_transcribe(self, *a, **kw):
+                    kw.pop("vad", None)
+                    return _orig_transcribe(self, *a, **kw)
+                WhisperModel.transcribe = _safe_transcribe
+                WhisperModel._vad_patched = True
+                log.info("[Titofy Windows Patch] WhisperModel.transcribe parcheado en RAM exitosamente")
+        except Exception as e:
+            log.error(f"[Titofy Windows Patch ERROR] {e}")
+
         # ── FASE 1 (Nivel 1): Proveedores Online Sincronizados (Fuente 1, Fuente 2) ────
         if mode in ("auto", "online_only", "online_align", "hybrid") and not (mode in ("offline", "ai_only")):
             log.info(f"[Titofy Nivel 1] Consultando fuentes sincronizadas (Fuente 1, Fuente 2)...")
@@ -120,7 +134,7 @@ class LyricsResolver:
 
                     # Si la letra ya está sincronizada (Fuente 1 / Fuente 2):
                     # En modo 'online_align' o 'hybrid', o en 'auto' si hay modelo descargado:
-                    # alinear contra el audio local
+                    # calibrar desfase de inicio (intro/videoclip) contra el audio local
                     if res.is_synced:
                         from whisper_engine.loader import is_any_model_downloaded, get_best_available_model
                         should_align = (
@@ -131,23 +145,18 @@ class LyricsResolver:
                             effective_model = get_best_available_model(model_name)
                             log.info(f"[Titofy] Modo '{mode}' con modelo '{effective_model}': ejecutando calibración acústica con audio local {audio_path}...")
                             try:
-                                aligned = await asyncio.to_thread(
-                                    self._align, res, audio_path, model_name=effective_model, language=language
+                                calibrated = await asyncio.to_thread(
+                                    self._calibrate_synced, res, audio_path, model_name=effective_model, language=language
                                 )
-                                if aligned and aligned.is_synced and len(aligned.lines) > 0:
-                                    aligned.title = res.title or clean_title
-                                    aligned.artist = res.artist or clean_artist
-                                    aligned.provider = f"{res.provider} · Alineada con Audio"
-                                    self._save_lrc_if_requested(aligned, output_lrc, audio_path, force=force)
-                                    return aligned
+                                if calibrated and calibrated.is_synced and len(calibrated.lines) > 0:
+                                    calibrated.title = res.title or clean_title
+                                    calibrated.artist = res.artist or clean_artist
+                                    self._save_lrc_if_requested(calibrated, output_lrc, audio_path, force=force)
+                                    return calibrated
                             except Exception as e:
-                                log.warning(f"[Titofy] Calibración con audio falló ({e}).")
-                                # Un modo explícito de alineación nunca debe degradar
-                                # silenciosamente a los timestamps de Internet.
-                                if mode in ("online_align", "hybrid"):
-                                    continue
-                            if mode in ("online_align", "hybrid"):
-                                continue
+                                log.warning(f"[Titofy] Calibración con audio falló ({e}). Entregando letra original.")
+                                self._save_lrc_if_requested(res, output_lrc, audio_path, force=force)
+                                return res
                         self._save_lrc_if_requested(res, output_lrc, audio_path, force=force)
                         return res
 
@@ -182,23 +191,30 @@ class LyricsResolver:
                                 return aligned
                         except Exception as e:
                             log.warning(f"Forced Alignment Nivel 2 falló ({e}).")
-                            if mode in ("online_align", "hybrid"):
+                            if mode == "online_align":
                                 continue
+                            if mode == "hybrid":
+                                log.info(f"[Titofy Híbrido] Alineación falló; entregando texto de {pres.provider}.")
+                                self._save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
+                                return pres
 
-                    if should_align and mode in ("online_align", "hybrid"):
+                    if should_align and mode == "online_align":
                         continue
 
                     self._save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
                     return pres
 
-        # Si el modo es solo online, o automático sin resultado online, retornar None limpiamente
-        if mode in ("online_only", "auto", "hybrid"):
+        # Si el modo es solo online o auto sin resultado online, retornar None limpiamente
+        if mode in ("online_only", "auto"):
             log.info(f"[Titofy] No se encontró letra online para '{clean_artist} - {clean_title}'. Finalizando sin sobrecargar CPU.")
             return None
 
-        # ── FASE 3 (Nivel 3): Whisper Local Offline (Solo si mode == 'ai_only') ───────
-        if mode == "ai_only":
+        # ── FASE 3 (Nivel 3): Whisper Local Offline (si mode == 'ai_only' o fallback en 'hybrid') ──
+        if mode in ("ai_only", "hybrid"):
             if not audio_path or not os.path.exists(audio_path):
+                if mode == "hybrid":
+                    log.info(f"[Titofy Híbrido] Sin audio local para transcribir. Finalizando.")
+                    return None
                 raise FileNotFoundError(
                     f"No se proporcionó archivo de audio local válido para transcripción: '{clean_artist} - {clean_title}'"
                 )
@@ -274,6 +290,86 @@ class LyricsResolver:
                 )
             )
             return res_sync
+
+    def _calibrate_synced(
+        self,
+        data: LyricData,
+        audio_path: str,
+        model_name: str = "small",
+        language: str = "auto",
+    ) -> LyricData:
+        """
+        Calibra letras que YA vienen sincronizadas online contra el audio local.
+        Detecta el desfase de inicio (intro/videoclip) sin alterar la métrica de LRCLIB.
+        """
+        if not data.lines:
+            return data
+
+        first_line = next(
+            (l for l in data.lines if l.text and l.text.strip() and not l.text.strip().lower().startswith("(intro")),
+            None,
+        )
+        if not first_line:
+            return data
+
+        original_start = float(first_line.start)
+
+        try:
+            from whisper_engine.loader import detect_device, load_whisper_model
+            device, _ = detect_device()
+            model, _ = load_whisper_model(model_name, device=device, compute_type="auto")
+
+            effective_lang = None if (not language or language == "auto") else language
+            result = model.transcribe(audio_path, language=effective_lang, word_timestamps=True)
+
+            first_vocal_time: float | None = None
+            if isinstance(result, tuple) and len(result) == 2:
+                segments_gen, _ = result
+                for s in segments_gen:
+                    text = str(getattr(s, "text", "") or "").strip()
+                    if text and len(text) >= 3:
+                        s_words = getattr(s, "words", None)
+                        if s_words:
+                            for w in s_words:
+                                if getattr(w, "word", "").strip():
+                                    first_vocal_time = float(getattr(w, "start", s.start))
+                                    break
+                        if first_vocal_time is None:
+                            first_vocal_time = float(s.start)
+                        break
+
+            if first_vocal_time is not None:
+                offset = round(first_vocal_time - original_start, 2)
+                if abs(offset) >= 0.6 and abs(offset) <= 60.0:
+                    log.info(
+                        f"[Titofy Calibración] Desfase detectado de {offset:+.2f}s "
+                        f"(audio: {first_vocal_time:.2f}s vs letra: {original_start:.2f}s). "
+                        f"Aplicando a {len(data.lines)} líneas..."
+                    )
+                    from lyrics.models import LyricLine
+                    calibrated_lines: list[LyricLine] = []
+                    if first_vocal_time >= 6.0:
+                        calibrated_lines.append(LyricLine(start=0.0, text="(intro)"))
+
+                    for l in data.lines:
+                        new_start = max(0.0, round(l.start + offset, 2))
+                        calibrated_lines.append(LyricLine(start=new_start, text=l.text))
+
+                    data.lines = calibrated_lines
+                    data.source = LyricSource.ONLINE_ALIGNED
+                    data.provider = f"{data.provider} · Calibrada ({offset:+.1f}s)"
+                    return data
+                else:
+                    log.info(
+                        f"[Titofy Calibración] Audio local coincide con letra online "
+                        f"({offset:+.2f}s). Marcas de tiempo de LRCLIB verificadas."
+                    )
+                    data.provider = f"{data.provider} · Verificada"
+                    return data
+        except Exception as e:
+            log.warning(f"[Titofy Calibración] Error en calibración acústica ({e}). Conservando sincronización original.")
+
+        return data
 
     def _align(
         self,

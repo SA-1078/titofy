@@ -96,3 +96,15 @@ begin
     KillProcesses();
   end;
 end;
+
+procedure CurPageChanged(CurPageID: Integer);
+var
+  InfoText: String;
+begin
+  if CurPageID = wpInfoBefore then
+  begin
+    InfoText := WizardForm.InfoBeforeMemo.Text;
+    StringChange(InfoText, 'BIENVENIDO A TITOFY DESKTOP v1.0.0', 'BIENVENIDO A TITOFY DESKTOP v{#MyAppVersion}');
+    WizardForm.InfoBeforeMemo.Text := InfoText;
+  end;
+end;

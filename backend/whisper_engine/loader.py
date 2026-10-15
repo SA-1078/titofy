@@ -56,6 +56,27 @@ __all__ = [
 ]
 
 
+def _patch_whisper_model(wm_class):
+    """Garantiza que WhisperModel.transcribe tolere 'vad' mapeándolo a 'vad_filter' sin lanzar TypeError."""
+    if os.name == "nt":
+        try:
+            from windows import patch_whisper_vad
+            if patch_whisper_vad(wm_class):
+                return
+        except Exception:
+            pass
+    if not getattr(wm_class, "_titofy_vad_patched", False):
+        orig_transcribe = wm_class.transcribe
+        def _safe_transcribe(self, *args, **kwargs):
+            if "vad" in kwargs:
+                v = kwargs.pop("vad")
+                if "vad_filter" not in kwargs:
+                    kwargs["vad_filter"] = bool(v)
+            return orig_transcribe(self, *args, **kwargs)
+        wm_class.transcribe = _safe_transcribe
+        wm_class._titofy_vad_patched = True
+
+
 def load_whisper_model(model_name: str, device: str, compute_type: str = "auto"):
     """
     Carga el modelo Whisper con tolerancia a fallos de GPU/drivers y fallback automático entre modelos.
@@ -119,6 +140,7 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
             else:
                 model_source = _find_complete_faster_snapshot(cur_model) or cur_model
             from faster_whisper import WhisperModel
+            _patch_whisper_model(WhisperModel)
             log.info(f"Cargando faster-whisper ({model_source}) en {device} ({selected_compute}, {num_threads} hilos)...")
             model = WhisperModel(model_source, device=device, compute_type=selected_compute, cpu_threads=num_threads)
             return model, True
@@ -128,6 +150,7 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
             if device == "cuda" and (is_model_downloaded(cur_model) or _snapshot_has_weights(model_source)):
                 try:
                     from faster_whisper import WhisperModel
+                    _patch_whisper_model(WhisperModel)
                     log.info(f"Reintentando faster-whisper ({cur_model}) en CPU (int8)...")
                     model = WhisperModel(model_source, device="cpu", compute_type="int8", cpu_threads=num_threads)
                     return model, True

@@ -28,20 +28,43 @@ Endpoints:
 import os
 import sys
 
-# Forzar codificacion UTF-8 en streams estandar de Windows para evitar UnicodeEncodeError
-if hasattr(sys.stdout, "reconfigure"):
+# Give synced source modules precedence over PyInstaller's _MEI archive before
+# importing any project module. This is harmless in regular Python launches.
+_pypath_env = os.environ.get("PYTHONPATH", "")
+for _p in reversed(_pypath_env.split(os.pathsep)):
+    _p = _p.strip()
+    if _p:
+        while _p in sys.path:
+            sys.path.remove(_p)
+        sys.path.insert(0, _p)
+
+# Inicializar entorno Windows si aplica (UTF-8, DLLs y parches)
+if os.name == "nt":
     try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-if hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        from windows import setup_windows_runtime
+        setup_windows_runtime()
     except Exception:
         pass
 
-# Asegurar que el directorio de este script esté en sys.path para resolver los imports de la misma carpeta
+# Asegurar que el directorio de trabajo (backend) esté en sys.path con máxima prioridad
+cwd_dir = os.path.abspath(os.getcwd())
+if cwd_dir not in sys.path:
+    sys.path.insert(0, cwd_dir)
+if getattr(sys, "frozen", False):
+    exe_dir = os.path.dirname(sys.executable)
+    if exe_dir not in sys.path:
+        sys.path.insert(0, exe_dir)
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+# Cuando corre como exe congelado, anteponer PYTHONPATH al final (mayor prioridad)
+# para que los .py reales del workspace ganen sobre _MEI
+if getattr(sys, "frozen", False):
+    _pypath_env = os.environ.get("PYTHONPATH", "")
+    for _p in reversed(_pypath_env.split(os.pathsep)):
+        _p = _p.strip()
+        if _p:
+            while _p in sys.path:
+                sys.path.remove(_p)
+            sys.path.insert(0, _p)
 
 from logger import SafeStream, get_logger
 if not isinstance(sys.stdout, SafeStream):

@@ -36,6 +36,15 @@ from whisper_engine.formatter import to_lrc_timestamp, clean_text, split_long_se
 
 log = get_logger("whisper.transcribe")
 
+
+def _normalize_faster_whisper_kwargs(kwargs: dict[str, typing.Any]) -> dict[str, typing.Any]:
+    """Converts legacy options before calling faster-whisper."""
+    normalized = dict(kwargs)
+    vad = normalized.pop("vad", None)
+    if vad is not None:
+        normalized.setdefault("vad_filter", bool(vad))
+    return normalized
+
 def _safe_print(*args: typing.Any, **kwargs: typing.Any) -> None:
     try:
         print(*args, **kwargs)
@@ -203,12 +212,11 @@ def transcribe_audio(
     transcribe_kwargs = {
         "language": lang_param,
         "initial_prompt": initial_prompt,
-        "vad": wcfg.get("vad", True),
     }
 
-
     if is_faster:
-        transcribe_kwargs.update({
+        # Construir kwargs candidatos para faster-whisper
+        _candidate_kwargs = {
             "beam_size": wcfg.get("beam_size", 5),
             "patience": wcfg.get("patience", 1.0),
             "no_speech_threshold": wcfg.get("no_speech_threshold", 0.6),
@@ -219,11 +227,31 @@ def transcribe_audio(
             "compression_ratio_threshold": wcfg.get("compression_ratio_threshold", 3.0),
             # Penalización de repetición baja → permite repetir frases reales de la canción
             "repetition_penalty": wcfg.get("repetition_penalty", 1.0),
+            # faster-whisper usa vad_filter booleano, no vad
+            "vad_filter": bool(wcfg.get("vad", False)),
             # Silenciar la barra de progreso interna de faster-whisper
             "verbose": False,
-        })
+        }
+        # Filtrar sólo los parámetros que esta versión de faster-whisper realmente acepta
+        import inspect as _inspect
+        try:
+            _fw_sig = _inspect.signature(model.transcribe)
+            _fw_params = set(_fw_sig.parameters.keys())
+            # Siempre se pasa **kwargs si la firma lo acepta; de lo contrario filtrar
+            if "kwargs" not in _fw_params and "**kwargs" not in str(_fw_sig):
+                _candidate_kwargs = {k: v for k, v in _candidate_kwargs.items() if k in _fw_params}
+        except Exception:
+            # No se pudo inspeccionar la firma — usar sólo parámetros seguros conocidos
+            _candidate_kwargs = {
+                k: v for k, v in _candidate_kwargs.items()
+                if k not in ("vad", "vad_filter", "repetition_penalty")
+            }
+        transcribe_kwargs.update(_candidate_kwargs)
     else:
         transcribe_kwargs["verbose"] = False
+        # Solo stable-whisper acepta vad booleano; faster-whisper y openai-whisper lanzan TypeError
+        if hasattr(model, "align") and bool(wcfg.get("vad", False)):
+            transcribe_kwargs["vad"] = True
 
     orig_tqdm: typing.Any = None
     try:
@@ -237,16 +265,42 @@ def transcribe_audio(
     import io
     devnull_stream = io.StringIO()
 
+    # Parámetros mínimos siempre seguros para cualquier versión de faster-whisper
+    _SAFE_FALLBACK_KEYS = {"language", "initial_prompt", "beam_size", "no_speech_threshold",
+                           "condition_on_previous_text", "verbose"}
+
+    def _transcribe_faster(m, audio, kwargs):
+        """Llama a transcribe y consume el generador de segmentos de forma eagera,
+        capturando TypeError que faster-whisper lanza durante la iteración."""
+        def _try_call(kw):
+            raw = m.transcribe(audio, **_normalize_faster_whisper_kwargs(kw))
+            # faster-whisper devuelve (generator, info) — consumir AHORA para capturar errores
+            if isinstance(raw, tuple) and len(raw) == 2:
+                segs_gen, info = raw
+                segs_list = list(segs_gen)  # ← aquí puede lanzar TypeError por kwargs inválidos
+                return (iter(segs_list), info)
+            return raw
+        try:
+            return _try_call(kwargs)
+        except TypeError as te:
+            err = str(te)
+            if "unexpected keyword argument" in err:
+                log.warning(f"Kwarg inválido en transcribe() ({te}). Reintentando con parámetros seguros...")
+                safe_kw = {k: v for k, v in kwargs.items() if k in _SAFE_FALLBACK_KEYS}
+                return _try_call(safe_kw)
+            raise
+
     try:
         sys.stdout = devnull_stream  # suprimir «Detected Language: ...» de stable-whisper
         model_obj: typing.Any = model
         if is_faster:
-            result = model_obj.transcribe(audio_path, **transcribe_kwargs)
+            result = _transcribe_faster(model_obj, audio_path, transcribe_kwargs)
         else:
             try:
                 result = model_obj.transcribe(audio_path, progress_callback=progress_callback, **transcribe_kwargs)
             except TypeError:
-                result = model_obj.transcribe(audio_path, **transcribe_kwargs)
+                safe_kwargs = {k: v for k, v in transcribe_kwargs.items() if k != "vad"}
+                result = model_obj.transcribe(audio_path, **safe_kwargs)
     except Exception as e:
         sys.stdout = real_stdout
         try:

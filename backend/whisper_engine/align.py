@@ -88,8 +88,9 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
         best_match_end_idx: int = -1
         best_match_score = 0.0
 
-        # Ventana de búsqueda hacia adelante generosa (hasta 250 palabras)
-        search_window_end = min(total_words, w_cursor + 250)
+        # Ventana de búsqueda hacia adelante razonable (hasta 60 palabras / ~20s)
+        # Evita saltar prematuramente al segundo o tercer coro de la canción
+        search_window_end = min(total_words, w_cursor + 60)
         t_len = len(tokens)
 
         for s_idx in range(w_cursor, max(w_cursor + 1, search_window_end - t_len + 1)):
@@ -102,7 +103,7 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
                         matches += 1
 
             score = matches / t_len
-            min_score = 0.35 if t_len >= 3 else 0.7
+            min_score = 0.55 if t_len >= 3 else 0.8
             if score >= min_score and score > best_match_score:
                 best_match_score = score
                 best_match_start = word_starts[s_idx]
@@ -110,7 +111,7 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
                 if score >= 0.90:
                     break
 
-        if best_match_start is not None and best_match_score >= 0.35:
+        if best_match_start is not None and best_match_score >= min_score:
             line_timestamps[line_idx] = best_match_start
             w_cursor = max(w_cursor, best_match_end_idx)
 
@@ -131,7 +132,10 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
         # Rellenar antes de la primera ancla sin retroceder a 0 si la voz empezó tarde
         resolved_ts[first_anchor_idx] = first_anchor_ts
         if first_anchor_idx > 0:
-            step = (first_anchor_ts - first_detected_vocal) / first_anchor_idx if first_anchor_ts > first_detected_vocal else 2.0
+            step = min(
+                (first_anchor_ts - first_detected_vocal) / first_anchor_idx if first_anchor_ts > first_detected_vocal else 2.5,
+                4.0,
+            )
             for i in range(first_anchor_idx - 1, -1, -1):
                 resolved_ts[i] = max(first_anchor_ts - ((first_anchor_idx - i) * step), first_detected_vocal)
 
@@ -143,9 +147,11 @@ def map_words_to_original_lines(original_lines: list[str], words: list[typing.An
             resolved_ts[idx_b] = ts_b
             count = idx_b - idx_a - 1
             if count > 0:
-                step = (ts_b - ts_a) / (count + 1)
+                raw_step = (ts_b - ts_a) / (count + 1)
+                # Limitar paso a máximo 4.5s para no desfasar versos por minutos
+                step = min(raw_step, 4.5)
                 for step_i, i in enumerate(range(idx_a + 1, idx_b), 1):
-                    resolved_ts[i] = ts_a + (step * step_i)
+                    resolved_ts[i] = min(ts_a + (step * step_i), ts_b - (0.8 * (idx_b - i)))
 
         # Rellenar después de la última ancla
         last_idx, last_ts = anchors[-1]

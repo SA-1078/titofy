@@ -8,6 +8,8 @@ import '../../core/services/locale_service.dart';
 import '../../core/services/database_service.dart';
 import '../../shell/window_controls.dart';
 
+const String _appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
+
 /// Pantalla de Configuración, Tema, Idioma, Biblioteca y Diagnóstico del Sistema
 class SettingsPage extends StatefulWidget {
   const SettingsPage({super.key});
@@ -599,7 +601,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Titofy Desktop v1.0.0', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: c.textPrimary)),
+                        Text('Titofy Desktop v$_appVersion', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: c.textPrimary)),
                         Text('Suite de Letras Sincronizadas & Reproductor con IA Offline', style: TextStyle(fontSize: 12, color: c.textSecondary)),
                       ],
                     ),

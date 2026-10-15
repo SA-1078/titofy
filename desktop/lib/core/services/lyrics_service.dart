@@ -96,15 +96,23 @@ class LyricsService extends ChangeNotifier {
     final filename = file.uri.pathSegments.isNotEmpty ? file.uri.pathSegments.last : audioPath.split(Platform.pathSeparator).last;
     final nameWithoutExt = filename.contains('.') ? filename.substring(0, filename.lastIndexOf('.')) : filename;
 
+    final sysTemp = Directory.systemTemp.path;
+    final envTemp = Platform.environment['TEMP'];
+    final envLocal = Platform.environment['LOCALAPPDATA'];
+
     final candidateDirs = [
-      '/home/santiago007/Documentos/titofy/cli/lrc',
+      '$sysTemp/cli/lrc',
+      if (envTemp != null) '$envTemp/cli/lrc',
+      if (envLocal != null) '$envLocal/Temp/cli/lrc',
+      '$sysTemp/titofy/lrc',
       '../cli/lrc',
       'cli/lrc',
-      '/home/santiago007/Documentos/titofy/backend/lrc',
       '../backend/lrc',
       'backend/lrc',
       '$audioDir/lyrics',
       '$audioDir/lrc',
+      '/home/santiago007/Documentos/titofy/cli/lrc',
+      '/home/santiago007/Documentos/titofy/backend/lrc',
     ];
 
     // 1. Coincidencia exacta de archivo ($baseName.lrc)
@@ -128,7 +136,16 @@ class LyricsService extends ChangeNotifier {
     }
 
     // 2. Coincidencia normalizada/difusa en cli/lrc
-    for (final cliDir in ['/home/santiago007/Documentos/titofy/cli/lrc', '../cli/lrc', 'cli/lrc', '$audioDir/lyrics']) {
+    final fuzzyDirs = [
+      '$sysTemp/cli/lrc',
+      if (envTemp != null) '$envTemp/cli/lrc',
+      if (envLocal != null) '$envLocal/Temp/cli/lrc',
+      '../cli/lrc',
+      'cli/lrc',
+      '$audioDir/lyrics',
+      '/home/santiago007/Documentos/titofy/cli/lrc',
+    ];
+    for (final cliDir in fuzzyDirs) {
       final d = Directory(cliDir);
       if (d.existsSync()) {
         final cleanBase = nameWithoutExt.toLowerCase().replaceAll(RegExp(r'[^a-zA-Z0-9]'), '');

@@ -1,4 +1,3 @@
-import 'dart:io';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
@@ -12,7 +11,6 @@ import 'widgets/studio_audio_card.dart';
 import 'widgets/studio_strategy_card.dart';
 import 'widgets/studio_control_card.dart';
 import 'widgets/studio_results_card.dart';
-import 'widgets/model_install_dialog.dart';
 
 /// Estudio de Inteligencia Artificial para Transcripción y Alineación
 class StudioPage extends StatefulWidget {
@@ -229,15 +227,12 @@ class _StudioPageState extends State<StudioPage> {
                 '¡Proceso completado! (${_resultLines.length} líneas generadas)';
           });
 
+          if (!mounted) return;
           try {
             final player = context.read<PlayerService>();
             if (player.currentTrack != null &&
                 player.currentTrack!.path == _selectedFilePath) {
-              await context.read<LyricsService>().loadForAudio(
-                    player.currentTrack!.path,
-                    title: player.currentTrack!.title,
-                    artist: player.currentTrack!.artist,
-                  );
+              context.read<LyricsService>().applyResolvedResponse(res);
             }
           } catch (_) {}
         } else {
@@ -355,7 +350,7 @@ class _StudioPageState extends State<StudioPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
                     Text(
-                      'Titofy IA Studio',
+                      'Titofy',
                       style: TextStyle(
                         fontSize: 22,
                         fontWeight: FontWeight.w800,
@@ -365,85 +360,137 @@ class _StudioPageState extends State<StudioPage> {
                     ),
                     const SizedBox(height: 2),
                     Text(
-                      api.isOnline
-                          ? 'Motor FastAPI conectado (localhost:8642) · Whisper con aceleración local'
-                          : 'Aviso: Servidor local no detectado en el puerto 8642',
+                      'Transcripción y sincronización de audio',
                       style: TextStyle(
                         fontSize: 12,
-                        color: api.isOnline ? AppColors.success : AppColors.warning,
+                        color: c.textSecondary,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
                   ],
                 ),
                 const Spacer(),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: api.isOnline
+                        ? const Color(0xFF142C1E)
+                        : const Color(0xFF2C1E14),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(
+                      color: api.isOnline
+                          ? const Color(0xFF22C55E).withOpacity(0.35)
+                          : const Color(0xFFF59E0B).withOpacity(0.35),
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Container(
+                        width: 7,
+                        height: 7,
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: api.isOnline
+                              ? const Color(0xFF22C55E)
+                              : const Color(0xFFF59E0B),
+                        ),
+                      ),
+                      const SizedBox(width: 7),
+                      Text(
+                        api.isOnline ? 'Motor disponible' : 'Motor desconectado',
+                        style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: api.isOnline
+                              ? const Color(0xFF4ADE80)
+                              : const Color(0xFFFBBF24),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 14),
                 WindowControls(isDark: c.isDark),
               ],
             ),
 
             const SizedBox(height: 22),
 
-            // ── Disposición Modular de Dos Columnas ─────────────────────────
-            Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // ── Columna Izquierda: Audio y Parámetros (flex: 7) ───────────
-                Expanded(
-                  flex: 7,
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      StudioAudioCard(
-                        selectedFilePath: _selectedFilePath,
-                        artistCtrl: _artistCtrl,
-                        titleCtrl: _titleCtrl,
-                        onPickFile: _pickAudioFile,
-                        onUseCurrentTrack: _useCurrentTrack,
-                      ),
-                      const SizedBox(height: 16),
-                      StudioStrategyCard(
-                        selectedMode: _selectedMode,
-                        selectedModel: _selectedModel,
-                        selectedLanguage: _selectedLanguage,
-                        customLyricsCtrl: _customLyricsCtrl,
-                        modelsInfo: _modelsInfo,
-                        onModeChanged: (mode) => setState(() => _selectedMode = mode),
-                        onModelChanged: (model) => setState(() => _selectedModel = model),
-                        onLanguageChanged: (lang) => setState(() => _selectedLanguage = lang),
-                        onRefreshModels: _loadModelsInfo,
-                      ),
-                    ],
-                  ),
-                ),
+            // ── Zona 01: Archivo de Audio (Ancho Completo Superior) ──────────
+            StudioAudioCard(
+              selectedFilePath: _selectedFilePath,
+              artistCtrl: _artistCtrl,
+              titleCtrl: _titleCtrl,
+              onPickFile: _pickAudioFile,
+              onUseCurrentTrack: _useCurrentTrack,
+            ),
 
-                const SizedBox(width: 18),
+            const SizedBox(height: 18),
 
-                // ── Columna Derecha: Control Hub y Ejecución (flex: 5) ────────
-                Expanded(
-                  flex: 5,
-                  child: Column(
+            // ── Zona 02 y Zona 03: Configuración (60%) y Procesamiento (40%) ──
+            LayoutBuilder(
+              builder: (context, constraints) {
+                final isWide = constraints.maxWidth >= 780;
+
+                final strategyWidget = StudioStrategyCard(
+                  selectedMode: _selectedMode,
+                  selectedModel: _selectedModel,
+                  selectedLanguage: _selectedLanguage,
+                  customLyricsCtrl: _customLyricsCtrl,
+                  modelsInfo: _modelsInfo,
+                  onModeChanged: (mode) => setState(() => _selectedMode = mode),
+                  onModelChanged: (model) => setState(() => _selectedModel = model),
+                  onLanguageChanged: (lang) => setState(() => _selectedLanguage = lang),
+                  onRefreshModels: _loadModelsInfo,
+                );
+
+                final controlWidget = StudioControlCard(
+                  isProcessing: _isProcessing,
+                  progressValue: _progressValue,
+                  currentStatusText: _currentStatusText,
+                  selectedMode: _selectedMode,
+                  selectedModel: _selectedModel,
+                  selectedLanguage: _selectedLanguage,
+                  api: api,
+                  onStartProcessing: () => _processAudio(api),
+                  onCancelProcessing: () {
+                    setState(() {
+                      _isProcessing = false;
+                      _progressValue = 0.0;
+                      _currentStatusText = 'Cancelado por el usuario';
+                    });
+                  },
+                );
+
+                if (!isWide) {
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      StudioControlCard(
-                        isProcessing: _isProcessing,
-                        progressValue: _progressValue,
-                        currentStatusText: _currentStatusText,
-                        selectedMode: _selectedMode,
-                        selectedModel: _selectedModel,
-                        selectedLanguage: _selectedLanguage,
-                        api: api,
-                        onStartProcessing: () => _processAudio(api),
-                        onCancelProcessing: () {
-                          setState(() {
-                            _isProcessing = false;
-                            _progressValue = 0.0;
-                            _currentStatusText = 'Cancelado por el usuario';
-                          });
-                        },
-                      ),
+                      strategyWidget,
+                      const SizedBox(height: 18),
+                      controlWidget,
                     ],
-                  ),
-                ),
-              ],
+                  );
+                }
+
+                return Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Columna Izquierda: Configuración (aprox 60%)
+                    Expanded(
+                      flex: 6,
+                      child: strategyWidget,
+                    ),
+                    const SizedBox(width: 18),
+                    // Columna Derecha: Procesamiento (aprox 40%)
+                    Expanded(
+                      flex: 4,
+                      child: controlWidget,
+                    ),
+                  ],
+                );
+              },
             ),
 
             // ── Resultados de Letras Sincronizadas ──────────────────────────

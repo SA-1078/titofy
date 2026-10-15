@@ -149,6 +149,35 @@ def _clear_incomplete_faster_cache(model_name: str) -> None:
                 log.warning(f"No se pudo reparar la caché Whisper '{snapshots_dir}': {exc}")
 
 
+def _materialize_snapshot_symlinks(snapshot_path: str) -> None:
+    """En Windows, CTranslate2 (C++) no puede abrir enlaces simbólicos relativos de HuggingFace
+    sin Developer Mode o privilegios de Administrador.
+    Reemplaza cualquier enlace simbólico en el snapshot con un HardLink nativo de NTFS
+    hacia el blob real (mismo inode, 0 bytes de espacio adicional).
+    """
+    if os.name != "nt" or not os.path.isdir(snapshot_path):
+        return
+
+    try:
+        for entry in os.listdir(snapshot_path):
+            file_path = os.path.join(snapshot_path, entry)
+            if os.path.islink(file_path):
+                try:
+                    real_target = os.path.realpath(file_path)
+                    if os.path.isfile(real_target) and os.path.getsize(real_target) > 0:
+                        os.remove(file_path)
+                        try:
+                            os.link(real_target, file_path)
+                            log.info(f"Enlace '{entry}' materializado a HardLink NTFS hacia '{real_target}'")
+                        except OSError:
+                            shutil.copy2(real_target, file_path)
+                            log.info(f"Enlace '{entry}' copiado como archivo real hacia '{file_path}'")
+                except Exception as exc:
+                    log.warning(f"No se pudo materializar enlace '{file_path}': {exc}")
+    except Exception as exc:
+        log.warning(f"Error inspeccionando enlaces en snapshot '{snapshot_path}': {exc}")
+
+
 def _find_complete_faster_snapshot(model_name: str) -> str | None:
     """Retorna la ruta exacta de un snapshot usable por CTranslate2."""
     for cache_dir in _huggingface_cache_dirs():
@@ -160,6 +189,7 @@ def _find_complete_faster_snapshot(model_name: str) -> str | None:
                 for entry in os.listdir(snapshots_dir):
                     snapshot = os.path.join(snapshots_dir, entry)
                     if os.path.isdir(snapshot) and _snapshot_has_weights(snapshot):
+                        _materialize_snapshot_symlinks(snapshot)
                         return snapshot
             except OSError:
                 continue
@@ -265,6 +295,7 @@ def fix_loader(model_name: str) -> str | None:
                 resume_download=True,
             )
             if _snapshot_has_weights(downloaded_snapshot):
+                _materialize_snapshot_symlinks(downloaded_snapshot)
                 log.info(f"Modelo '{model_name}' reparado y verificado: {downloaded_snapshot}")
                 return downloaded_snapshot
             last_error = RuntimeError(f"HuggingFace terminó sin model.bin usable en {downloaded_snapshot}")

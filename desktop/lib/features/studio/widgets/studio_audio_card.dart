@@ -1,10 +1,9 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../../../core/theme/colors.dart';
-import '../../../../core/services/player_service.dart';
 
-/// Tarjeta de Selección de Archivo de Audio y Metadatos para IA Studio
-class StudioAudioCard extends StatelessWidget {
+/// Tarjeta de Selección de Archivo de Audio (Ancho completo superior - Paso 01)
+class StudioAudioCard extends StatefulWidget {
   final String? selectedFilePath;
   final TextEditingController artistCtrl;
   final TextEditingController titleCtrl;
@@ -21,11 +20,37 @@ class StudioAudioCard extends StatelessWidget {
   });
 
   @override
+  State<StudioAudioCard> createState() => _StudioAudioCardState();
+}
+
+class _StudioAudioCardState extends State<StudioAudioCard> {
+  bool _showMetadataFields = false;
+
+  @override
   Widget build(BuildContext context) {
     final c = context.colors;
+    final hasFile = widget.selectedFilePath != null && widget.selectedFilePath!.isNotEmpty;
+
+    String fileName = '';
+    String fileExt = 'AUDIO';
+    if (hasFile) {
+      final f = File(widget.selectedFilePath!);
+      fileName = f.uri.pathSegments.isNotEmpty ? f.uri.pathSegments.last : widget.selectedFilePath!;
+      final dot = fileName.lastIndexOf('.');
+      if (dot != -1) {
+        fileExt = fileName.substring(dot + 1).toUpperCase();
+        fileName = fileName.substring(0, dot);
+      }
+    }
+
+    final displayTitle = widget.titleCtrl.text.trim().isNotEmpty
+        ? (widget.artistCtrl.text.trim().isNotEmpty
+            ? '${widget.titleCtrl.text.trim()} — ${widget.artistCtrl.text.trim()}'
+            : widget.titleCtrl.text.trim())
+        : (hasFile ? fileName : 'Ningún archivo de audio seleccionado');
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
       decoration: BoxDecoration(
         color: c.surface,
         borderRadius: BorderRadius.circular(16),
@@ -42,39 +67,54 @@ class StudioAudioCard extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
+          // ── Encabezado del Paso 01 ──────────────────────────────────────
           Row(
             children: [
-              Icon(Icons.audio_file_rounded, size: 16, color: c.primary),
-              const SizedBox(width: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+                decoration: BoxDecoration(
+                  color: c.primary.withOpacity(0.14),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text(
+                  '01',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: c.primary,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 10),
               Text(
-                '1. ARCHIVO DE AUDIO',
+                'Archivo de audio',
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 14,
                   fontWeight: FontWeight.w700,
-                  color: c.primary,
-                  letterSpacing: 1.0,
+                  color: c.textPrimary,
+                  letterSpacing: -0.2,
                 ),
               ),
               const Spacer(),
               TextButton.icon(
-                icon: Icon(Icons.music_note_rounded, size: 13, color: c.primary),
+                icon: Icon(Icons.music_note_rounded, size: 14, color: c.primary),
                 label: Text(
                   'Usar pista en reproducción',
-                  style: TextStyle(fontSize: 11, color: c.primary, fontWeight: FontWeight.bold),
+                  style: TextStyle(fontSize: 11.5, color: c.primary, fontWeight: FontWeight.w600),
                 ),
                 style: TextButton.styleFrom(
                   padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                   visualDensity: VisualDensity.compact,
                 ),
-                onPressed: onUseCurrentTrack,
+                onPressed: widget.onUseCurrentTrack,
               ),
             ],
           ),
           const SizedBox(height: 12),
 
-          // Zona interactiva de archivo
+          // ── Fila Principal: Icono + Detalles + Botón Cambiar ────────────
           InkWell(
-            onTap: onPickFile,
+            onTap: widget.onPickFile,
             borderRadius: BorderRadius.circular(12),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
@@ -82,42 +122,57 @@ class StudioAudioCard extends StatelessWidget {
                 color: c.backgroundAlt,
                 borderRadius: BorderRadius.circular(12),
                 border: Border.all(
-                  color: selectedFilePath != null ? c.primary.withOpacity(0.5) : c.glassBorder,
-                  width: 1.2,
+                  color: hasFile ? c.primary.withOpacity(0.4) : c.glassBorder,
+                  width: 1.1,
                 ),
               ),
               child: Row(
                 children: [
+                  // Cuadro oscuro con icono de audio
                   Container(
-                    padding: const EdgeInsets.all(8),
+                    width: 44,
+                    height: 44,
                     decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: c.primary.withOpacity(0.12),
+                      color: c.isDark ? const Color(0xFF1E222D) : Colors.black87,
+                      borderRadius: BorderRadius.circular(10),
                     ),
-                    child: Icon(Icons.folder_open_rounded, size: 18, color: c.primary),
+                    child: Icon(
+                      hasFile ? Icons.graphic_eq_rounded : Icons.audio_file_outlined,
+                      color: c.primary,
+                      size: 22,
+                    ),
                   ),
-                  const SizedBox(width: 12),
+                  const SizedBox(width: 14),
+
+                  // Título, formato y estado
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          selectedFilePath != null
-                              ? File(selectedFilePath!).uri.pathSegments.last
-                              : 'Haz clic aquí para seleccionar un archivo de audio',
+                          displayTitle,
                           style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: selectedFilePath != null ? FontWeight.w700 : FontWeight.w500,
-                            color: selectedFilePath != null ? c.textPrimary : c.textMuted,
+                            fontSize: 13.5,
+                            fontWeight: FontWeight.w700,
+                            color: hasFile ? c.textPrimary : c.textMuted,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
-                        if (selectedFilePath != null) ...[
+                        const SizedBox(height: 3),
+                        Text(
+                          hasFile ? '$fileExt · Archivo seleccionado' : 'Haz clic para examinar pistas en tu equipo',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: hasFile ? c.textSecondary : c.textMuted,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                        if (hasFile) ...[
                           const SizedBox(height: 2),
                           Text(
-                            selectedFilePath!,
-                            style: TextStyle(fontSize: 10.5, color: c.textMuted),
+                            widget.selectedFilePath!,
+                            style: TextStyle(fontSize: 10, color: c.textMuted),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -125,30 +180,49 @@ class StudioAudioCard extends StatelessWidget {
                       ],
                     ),
                   ),
-                  const SizedBox(width: 10),
-                  ElevatedButton(
-                    onPressed: onPickFile,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: c.surfaceHover,
+                  const SizedBox(width: 12),
+
+                  // Botón Cambiar / Examinar
+                  OutlinedButton(
+                    onPressed: widget.onPickFile,
+                    style: OutlinedButton.styleFrom(
                       foregroundColor: c.textPrimary,
-                      elevation: 0,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
-                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                      side: BorderSide(color: c.glassBorder),
+                      backgroundColor: c.surfaceHover,
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(9)),
+                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                     ),
-                    child: const Text('Examinar', style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.bold)),
+                    child: Text(
+                      hasFile ? 'Cambiar' : 'Examinar',
+                      style: const TextStyle(fontSize: 12, fontWeight: FontWeight.bold),
+                    ),
                   ),
+
+                  if (hasFile) ...[
+                    const SizedBox(width: 6),
+                    IconButton(
+                      icon: Icon(
+                        _showMetadataFields ? Icons.edit_note_rounded : Icons.edit_outlined,
+                        size: 18,
+                        color: _showMetadataFields ? c.primary : c.textSecondary,
+                      ),
+                      tooltip: _showMetadataFields ? 'Ocultar metadatos' : 'Editar artista y título',
+                      onPressed: () => setState(() => _showMetadataFields = !_showMetadataFields),
+                    ),
+                  ],
                 ],
               ),
             ),
           ),
 
-          if (selectedFilePath != null) ...[
+          // ── Campos editables de Artista y Título (desplegables) ─────────
+          if (hasFile && _showMetadataFields) ...[
             const SizedBox(height: 12),
             Row(
               children: [
                 Expanded(
                   child: TextField(
-                    controller: artistCtrl,
+                    controller: widget.artistCtrl,
                     style: TextStyle(fontSize: 12, color: c.textPrimary),
                     decoration: InputDecoration(
                       labelText: 'Artista',
@@ -163,7 +237,7 @@ class StudioAudioCard extends StatelessWidget {
                 const SizedBox(width: 12),
                 Expanded(
                   child: TextField(
-                    controller: titleCtrl,
+                    controller: widget.titleCtrl,
                     style: TextStyle(fontSize: 12, color: c.textPrimary),
                     decoration: InputDecoration(
                       labelText: 'Título',

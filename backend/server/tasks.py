@@ -62,6 +62,18 @@ def run_transcription(task: TaskState, req: TranscribeRequest) -> None:
         task.progress = 10
         log.info(f"[{task.task_id}] Transcripción iniciada: {req.audio_path}")
 
+        import importlib
+        # Eliminar de sys.modules para forzar re-importación desde sys.path[0]
+        # (que es el workspace real cuando se lanza el exe con PYTHONPATH=backendDir)
+        for _mod_key in list(sys.modules.keys()):
+            if _mod_key.startswith("whisper_engine"):
+                sys.modules.pop(_mod_key, None)
+        try:
+            import faster_whisper
+            from whisper_engine.loader import _patch_whisper_model
+            _patch_whisper_model(faster_whisper.WhisperModel)
+        except Exception:
+            pass
         from whisper_engine.transcribe import transcribe_audio
         output = req.output_path or os.path.splitext(os.path.basename(req.audio_path))[0] + ".lrc"
 

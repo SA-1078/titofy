@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'windows/windows.dart';
 
 /// Servicio de conexión con la API local de Titofy (FastAPI en http://127.0.0.1:8642)
 class ApiService extends ChangeNotifier {
@@ -96,12 +97,11 @@ class ApiService extends ChangeNotifier {
       final exeServer = File('$backendDir/api_server.exe');
 
       if (isWin && exeServer.existsSync()) {
-        debugPrint('[ApiService] Iniciando ejecutable autónomo de FastAPI: ${exeServer.path}');
-        _backendProcess = await Process.start(
-          exeServer.path,
-          ['--parent-pid', pid.toString()],
-          workingDirectory: backendDir,
-          mode: ProcessStartMode.normal,
+        debugPrint('[ApiService] Iniciando ejecutable autónomo de FastAPI en Windows...');
+        _backendProcess = await WindowsBackendService().startBackendProcess(backendDir, pid);
+        Future.delayed(
+          const Duration(milliseconds: 1500),
+          () => _syncLocalBackendCodeToTemp(backendDir),
         );
       } else {
         final pythonBin = _resolvePythonExecutable(backendDir);
@@ -148,6 +148,10 @@ class ApiService extends ChangeNotifier {
       for (int i = 0; i < 30; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
         if (await checkHealth() != null) {
+          _syncLocalBackendCodeToTemp(backendDir);
+          if (Platform.isWindows) {
+            await WindowsBackendService().warmupWindowsPatches(_baseUrl, _client);
+          }
           _isStartingBackend = false;
           _lastErrorMessage = null;
           notifyListeners();
@@ -164,6 +168,13 @@ class ApiService extends ChangeNotifier {
     return false;
   }
 
+  void _syncLocalBackendCodeToTemp(String backendDir) {
+    if (Platform.isWindows) {
+      WindowsBackendService().syncAndPatchMei(backendDir);
+    }
+  }
+
+
   String? _lastErrorMessage;
   String? get lastErrorMessage => _lastErrorMessage;
 
@@ -178,6 +189,8 @@ class ApiService extends ChangeNotifier {
       currentDir,
       '$currentDir/../backend',
       '$currentDir/../../backend',
+      if (Platform.isWindows && Platform.environment['LOCALAPPDATA'] != null)
+        '${Platform.environment['LOCALAPPDATA']}/Programs/Titofy/backend',
       '/home/santiago007/Documentos/titofy/backend',
       '/home/santiago007/.local/share/titofy/backend',
     ];
@@ -222,6 +235,8 @@ class ApiService extends ChangeNotifier {
     String? outputPath,
     bool force = false,
   }) async {
+    final bDir = _resolveBackendDirectory();
+    if (bDir != null) _syncLocalBackendCodeToTemp(bDir);
     try {
       final payload = {
         'artist': artist,
@@ -270,6 +285,8 @@ class ApiService extends ChangeNotifier {
     String? outputPath,
     bool wordMode = true,
   }) async {
+    final bDir = _resolveBackendDirectory();
+    if (bDir != null) _syncLocalBackendCodeToTemp(bDir);
     try {
       final res = await _client
           .post(
@@ -425,16 +442,7 @@ class ApiService extends ChangeNotifier {
   Future<void> _freePort(int port) async {
     try {
       if (Platform.isWindows) {
-        final res = await Process.run('cmd', ['/c', 'netstat -ano | findstr :$port']);
-        if (res.exitCode == 0 && res.stdout.toString().isNotEmpty) {
-          for (final line in res.stdout.toString().split('\n')) {
-            final parts = line.trim().split(RegExp(r'\s+'));
-            if (parts.length >= 5 && parts.contains('LISTENING')) {
-              final pid = parts.last;
-              await Process.run('taskkill', ['/F', '/PID', pid]);
-            }
-          }
-        }
+        await WindowsBackendService().freePort(port);
       } else {
         // En Linux/macOS, terminar cualquier proceso ocupando el puerto TCP
         await Process.run('fuser', ['-k', '$port/tcp']);
