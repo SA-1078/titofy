@@ -3,43 +3,10 @@ import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart';
+import '../models/playlist_model.dart';
+import 'db/database_schema.dart';
 
-/// Modelo de Lista de Reproducción del usuario
-class PlaylistModel {
-  final int id;
-  final String name;
-  final String? description;
-  final int createdAt;
-  final int updatedAt;
-  final int trackCount;
-
-  PlaylistModel({
-    required this.id,
-    required this.name,
-    this.description,
-    required this.createdAt,
-    required this.updatedAt,
-    this.trackCount = 0,
-  });
-
-  PlaylistModel copyWith({
-    int? id,
-    String? name,
-    String? description,
-    int? createdAt,
-    int? updatedAt,
-    int? trackCount,
-  }) {
-    return PlaylistModel(
-      id: id ?? this.id,
-      name: name ?? this.name,
-      description: description ?? this.description,
-      createdAt: createdAt ?? this.createdAt,
-      updatedAt: updatedAt ?? this.updatedAt,
-      trackCount: trackCount ?? this.trackCount,
-    );
-  }
-}
+export '../models/playlist_model.dart';
 
 /// Servicio local de persistencia con SQLite para Titofy
 class DatabaseService extends ChangeNotifier {
@@ -81,7 +48,7 @@ class DatabaseService extends ChangeNotifier {
       _db!.execute('PRAGMA foreign_keys = ON;');
       _db!.execute('PRAGMA journal_mode = WAL;');
 
-      _createTables();
+      DatabaseSchema.createTables(_db!);
       _loadSettings();
       _loadFavorites();
       _loadPlaylists();
@@ -92,64 +59,6 @@ class DatabaseService extends ChangeNotifier {
     } catch (e) {
       debugPrint('[DatabaseService] Error al inicializar SQLite: $e');
     }
-  }
-
-  void _createTables() {
-    if (_db == null) return;
-
-    _db!.execute('''
-      CREATE TABLE IF NOT EXISTS app_settings (
-        key TEXT PRIMARY KEY,
-        value TEXT NOT NULL
-      );
-    ''');
-
-    _db!.execute('''
-      CREATE TABLE IF NOT EXISTS tracks (
-        path TEXT PRIMARY KEY,
-        title TEXT NOT NULL,
-        artist TEXT NOT NULL,
-        album TEXT NOT NULL,
-        duration_ms INTEGER NOT NULL DEFAULT 0,
-        is_favorite INTEGER NOT NULL DEFAULT 0,
-        play_count INTEGER NOT NULL DEFAULT 0,
-        last_played_at INTEGER,
-        added_at INTEGER NOT NULL
-      );
-    ''');
-
-    _db!.execute('''
-      CREATE TABLE IF NOT EXISTS playlists (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        description TEXT,
-        created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      );
-    ''');
-
-    _db!.execute('''
-      CREATE TABLE IF NOT EXISTS playlist_tracks (
-        playlist_id INTEGER NOT NULL,
-        track_path TEXT NOT NULL,
-        position INTEGER NOT NULL DEFAULT 0,
-        added_at INTEGER NOT NULL,
-        PRIMARY KEY (playlist_id, track_path),
-        FOREIGN KEY (playlist_id) REFERENCES playlists (id) ON DELETE CASCADE
-      );
-    ''');
-
-    _db!.execute('''
-      CREATE TABLE IF NOT EXISTS playback_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        track_path TEXT NOT NULL,
-        played_at INTEGER NOT NULL
-      );
-    ''');
-
-    _db!.execute('CREATE INDEX IF NOT EXISTS idx_tracks_favorite ON tracks(is_favorite);');
-    _db!.execute('CREATE INDEX IF NOT EXISTS idx_tracks_last_played ON tracks(last_played_at);');
-    _db!.execute('CREATE INDEX IF NOT EXISTS idx_history_played_at ON playback_history(played_at);');
   }
 
   // ── CONFIGURACIONES DE USUARIO (SETTINGS) ──────────────────────────────────
@@ -249,6 +158,65 @@ class DatabaseService extends ChangeNotifier {
     } catch (e) {
       _db!.execute('ROLLBACK;');
       debugPrint('[DatabaseService] Error en upsertBatchTracksRaw: $e');
+    }
+  }
+
+  /// Actualiza la ruta remota de una pista (ej: youtube:id) a la ruta física descargada
+  void updateTrackLocalPath({
+    required String oldRemotePath,
+    required String newLocalPath,
+    int? durationMs,
+    String? title,
+    String? artist,
+    String? album,
+  }) {
+    if (_db == null) return;
+    _db!.execute('BEGIN TRANSACTION;');
+    try {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final existing = _db!.select('SELECT * FROM tracks WHERE path = ? LIMIT 1;', [oldRemotePath]);
+      if (existing.isNotEmpty) {
+        final row = existing.first;
+        _db!.execute('''
+          INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, is_favorite, play_count, added_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+        ''', [
+          newLocalPath,
+          title ?? row['title'],
+          artist ?? row['artist'],
+          album ?? row['album'],
+          durationMs ?? row['duration_ms'],
+          row['is_favorite'] ?? 0,
+          row['play_count'] ?? 0,
+          row['added_at'] ?? now,
+        ]);
+      } else {
+        _db!.execute('''
+          INSERT OR REPLACE INTO tracks (path, title, artist, album, duration_ms, is_favorite, play_count, added_at)
+          VALUES (?, ?, ?, ?, ?, 0, 0, ?);
+        ''', [
+          newLocalPath,
+          title ?? 'Pista descargada',
+          artist ?? 'Desconocido',
+          album ?? 'Descargas',
+          durationMs ?? 0,
+          now,
+        ]);
+      }
+
+      _db!.execute('''
+        UPDATE OR IGNORE playlist_tracks SET track_path = ? WHERE track_path = ?;
+      ''', [newLocalPath, oldRemotePath]);
+
+      _db!.execute('DELETE FROM playlist_tracks WHERE track_path = ?;', [oldRemotePath]);
+      _db!.execute('DELETE FROM tracks WHERE path = ?;', [oldRemotePath]);
+
+      _db!.execute('COMMIT;');
+      _loadPlaylists();
+      notifyListeners();
+    } catch (e) {
+      _db!.execute('ROLLBACK;');
+      debugPrint('[DatabaseService] Error al actualizar ruta local de pista: $e');
     }
   }
 
@@ -447,6 +415,115 @@ class DatabaseService extends ChangeNotifier {
       [playlistId, trackPath],
     );
     return rows.isNotEmpty;
+  }
+
+  /// Busca si una playlist ya ha sido importada previamente mediante su URL de origen
+  PlaylistModel? findPlaylistBySourceUrl(String sourceUrl) {
+    if (_db == null || sourceUrl.trim().isEmpty) return null;
+    final cleanUrl = sourceUrl.trim();
+    final rows = _db!.select(
+      'SELECT id FROM playlists WHERE description = ? OR description LIKE ? LIMIT 1;',
+      [cleanUrl, '%$cleanUrl%'],
+    );
+    if (rows.isEmpty) return null;
+    final id = rows.first['id'] as int;
+    for (final p in _playlists) {
+      if (p.id == id) return p;
+    }
+    return null;
+  }
+
+  /// Obtiene los datos de pistas para una playlist desde SQLite (soporta pistas locales y remotas)
+  List<Map<String, dynamic>> getTracksForPlaylistRaw(int playlistId) {
+    if (_db == null) return [];
+    final rows = _db!.select('''
+      SELECT t.path, t.title, t.artist, t.album, t.duration_ms, t.is_favorite, pt.position
+      FROM playlist_tracks pt
+      JOIN tracks t ON pt.track_path = t.path
+      WHERE pt.playlist_id = ?
+      ORDER BY pt.position ASC, pt.added_at ASC;
+    ''', [playlistId]);
+    return rows.map((r) => Map<String, dynamic>.from(r)).toList();
+  }
+
+  /// Importa atómicamente una lista de reproducción desde YouTube / YouTube Music
+  PlaylistModel? importYouTubePlaylist({
+    required String name,
+    required String sourceUrl,
+    String? description,
+    required List<Map<String, dynamic>> tracks,
+  }) {
+    if (_db == null || name.trim().isEmpty) return null;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final fullDesc = description != null && description.trim().isNotEmpty
+        ? '${description.trim()}\nFuente: $sourceUrl'
+        : 'Fuente: $sourceUrl';
+
+    _db!.execute('BEGIN TRANSACTION;');
+    try {
+      _db!.execute('''
+        INSERT INTO playlists (name, description, created_at, updated_at)
+        VALUES (?, ?, ?, ?);
+      ''', [name.trim(), fullDesc, now, now]);
+
+      final playlistId = _db!.lastInsertRowId;
+
+      final trackStmt = _db!.prepare('''
+        INSERT INTO tracks (path, title, artist, album, duration_ms, is_favorite, play_count, added_at)
+        VALUES (?, ?, ?, ?, ?, 0, 0, ?)
+        ON CONFLICT(path) DO UPDATE SET
+          title = excluded.title,
+          artist = excluded.artist,
+          album = excluded.album,
+          duration_ms = excluded.duration_ms;
+      ''');
+
+      final plTrackStmt = _db!.prepare('''
+        INSERT OR IGNORE INTO playlist_tracks (playlist_id, track_path, position, added_at)
+        VALUES (?, ?, ?, ?);
+      ''');
+
+      for (int i = 0; i < tracks.length; i++) {
+        final t = tracks[i];
+        final path = t['path'] as String;
+        final title = t['title'] as String? ?? 'Sin título';
+        final artist = t['artist'] as String? ?? 'Artista desconocido';
+        final album = t['album'] as String? ?? name.trim();
+        final durationMs = (t['duration_ms'] as int?) ?? 0;
+
+        trackStmt.execute([
+          path,
+          title,
+          artist,
+          album,
+          durationMs,
+          now,
+        ]);
+
+        plTrackStmt.execute([
+          playlistId,
+          path,
+          i,
+          now,
+        ]);
+      }
+
+      trackStmt.dispose();
+      plTrackStmt.dispose();
+
+      _db!.execute('COMMIT;');
+      _loadPlaylists();
+      notifyListeners();
+
+      for (final p in _playlists) {
+        if (p.id == playlistId) return p;
+      }
+      return null;
+    } catch (e) {
+      _db!.execute('ROLLBACK;');
+      debugPrint('[DatabaseService] Error al importar playlist de YouTube: $e');
+      rethrow;
+    }
   }
 
   @override

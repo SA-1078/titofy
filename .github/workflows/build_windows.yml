@@ -73,6 +73,19 @@ jobs:
           Copy-Item dist\api_server.exe -Destination ..\desktop\build\windows\x64\runner\Release\backend\ -Force
           Copy-Item config.yaml -Destination ..\desktop\build\windows\x64\runner\Release\backend\ -Force
 
+      - name: Incluir FFmpeg para análisis acústico local
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+          choco install ffmpeg -y --no-progress
+          $ffmpeg = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
+          $target = "desktop\build\windows\x64\runner\Release\backend\bin"
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          Copy-Item $ffmpeg -Destination "$target\ffmpeg.exe" -Force
+          if (!(Test-Path "$target\ffmpeg.exe")) {
+            throw "Error critico: no se pudo empaquetar ffmpeg.exe"
+          }
+
       - name: Instalar Inno Setup
         run: choco install innosetup -y
 

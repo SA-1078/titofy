@@ -29,3 +29,6 @@ PyYAML
 fastapi
 pydantic
 uvicorn[standard]
+
+# Metadatos de YouTube / YouTube Music (playlists y videos)
+yt-dlp

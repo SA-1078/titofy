@@ -12,33 +12,49 @@ class SpectrumPainter extends CustomPainter {
   final List<double> peaks;
   final double beatEnergy;
   final VisualizerTheme theme;
+  final SpectrumController? controller;
 
   SpectrumPainter({
     required this.levels,
     required this.peaks,
     required this.beatEnergy,
     required this.theme,
-  });
+  }) : controller = null;
+
+  SpectrumPainter.fromController(SpectrumController value)
+    : levels = value.levels,
+      peaks = value.peaks,
+      beatEnergy = value.beatEnergy,
+      theme = value.theme,
+      controller = value,
+      super(repaint: value);
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (size.width <= 0 || size.height <= 0 || levels.isEmpty) return;
+    final active = controller;
+    final currentLevels = active?.levels ?? levels;
+    final currentBeatEnergy = active?.beatEnergy ?? beatEnergy;
+    final currentTheme = active?.theme ?? theme;
+    if (size.width <= 0 || size.height <= 0 || currentLevels.isEmpty) return;
 
-    final numBars = levels.length;
+    final numBars = currentLevels.length;
     const double barSpacing = 3.0;
     // Ocupa el 100% exacto del ancho de la pantalla sin cortes
-    final double barWidth = math.max(1.5, (size.width - ((numBars - 1) * barSpacing)) / numBars);
+    final double barWidth = math.max(
+      1.5,
+      (size.width - ((numBars - 1) * barSpacing)) / numBars,
+    );
     final double maxHeight = size.height * 0.84;
 
     // ── 1. Resplandor Ambiental Reactivo en el Fondo (Beat Glow) ─────────────
-    if (beatEnergy > 0.04) {
+    if (currentBeatEnergy > 0.04) {
       final glowPaint = Paint()
         ..shader = ui.Gradient.radial(
           Offset(size.width * 0.28, size.height * 0.72),
-          size.width * 0.50 * (1.0 + beatEnergy * 0.25),
+          size.width * 0.50 * (1.0 + currentBeatEnergy * 0.25),
           [
-            AppColors.coral.withOpacity(0.28 * beatEnergy),
-            const Color(0xFF8B5CF6).withOpacity(0.12 * beatEnergy),
+            AppColors.coral.withOpacity(0.28 * currentBeatEnergy),
+            const Color(0xFF8B5CF6).withOpacity(0.12 * currentBeatEnergy),
             Colors.transparent,
           ],
           const [0.0, 0.55, 1.0],
@@ -49,7 +65,7 @@ class SpectrumPainter extends CustomPainter {
     // ── 2. Paletas de Gradiente Premium ──────────────────────────────────────
     List<Color> gradientColors;
 
-    switch (theme) {
+    switch (currentTheme) {
       case VisualizerTheme.coralNeon:
         gradientColors = const [
           Color(0xFFFF8EA3), // Rosa neón brillante en la cima
@@ -83,7 +99,7 @@ class SpectrumPainter extends CustomPainter {
       (index) => index / (gradientColors.length - 1),
     );
 
-    final barShader = (theme == VisualizerTheme.rainbow)
+    final barShader = (currentTheme == VisualizerTheme.rainbow)
         ? ui.Gradient.linear(
             const Offset(0, 0),
             Offset(size.width, 0),
@@ -105,16 +121,18 @@ class SpectrumPainter extends CustomPainter {
     final barsPath = Path();
     for (int i = 0; i < numBars; i++) {
       final double x = i * (barWidth + barSpacing);
-      final double level = levels[i].clamp(0.015, 1.0);
+      final double level = currentLevels[i].clamp(0.015, 1.0);
       final double barH = (level * maxHeight).clamp(4.0, maxHeight);
       final double y = size.height - barH;
 
       final radius = Radius.circular(math.min(barWidth / 2, 4.0));
-      barsPath.addRRect(RRect.fromRectAndCorners(
-        Rect.fromLTWH(x, y, barWidth, barH),
-        topLeft: radius,
-        topRight: radius,
-      ));
+      barsPath.addRRect(
+        RRect.fromRectAndCorners(
+          Rect.fromLTWH(x, y, barWidth, barH),
+          topLeft: radius,
+          topRight: radius,
+        ),
+      );
     }
     canvas.drawPath(barsPath, barPaint);
 
@@ -141,5 +159,18 @@ class SpectrumPainter extends CustomPainter {
   }
 
   @override
-  bool shouldRepaint(covariant SpectrumPainter oldDelegate) => true;
+  bool shouldRepaint(covariant SpectrumPainter oldDelegate) {
+    // Cuando el painter está conectado al controller, éste ya llama a paint
+    // mediante `repaint`; no hace falta forzar un segundo repintado cuando el
+    // widget padre se reconstruye por otra razón.
+    if (controller != null &&
+        identical(controller, oldDelegate.controller) &&
+        oldDelegate.theme == theme) {
+      return false;
+    }
+    return oldDelegate.levels != levels ||
+        oldDelegate.peaks != peaks ||
+        oldDelegate.beatEnergy != beatEnergy ||
+        oldDelegate.theme != theme;
+  }
 }

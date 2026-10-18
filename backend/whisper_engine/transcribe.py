@@ -43,6 +43,7 @@ def _normalize_faster_whisper_kwargs(kwargs: dict[str, typing.Any]) -> dict[str,
     vad = normalized.pop("vad", None)
     if vad is not None:
         normalized.setdefault("vad_filter", bool(vad))
+    normalized.pop("verbose", None)
     return normalized
 
 def _safe_print(*args: typing.Any, **kwargs: typing.Any) -> None:
@@ -229,8 +230,6 @@ def transcribe_audio(
             "repetition_penalty": wcfg.get("repetition_penalty", 1.0),
             # faster-whisper usa vad_filter booleano, no vad
             "vad_filter": bool(wcfg.get("vad", False)),
-            # Silenciar la barra de progreso interna de faster-whisper
-            "verbose": False,
         }
         # Filtrar sólo los parámetros que esta versión de faster-whisper realmente acepta
         import inspect as _inspect
@@ -267,7 +266,7 @@ def transcribe_audio(
 
     # Parámetros mínimos siempre seguros para cualquier versión de faster-whisper
     _SAFE_FALLBACK_KEYS = {"language", "initial_prompt", "beam_size", "no_speech_threshold",
-                           "condition_on_previous_text", "verbose"}
+                           "condition_on_previous_text"}
 
     def _transcribe_faster(m, audio, kwargs):
         """Llama a transcribe y consume el generador de segmentos de forma eagera,

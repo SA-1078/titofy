@@ -4,12 +4,16 @@ import 'package:media_kit/media_kit.dart' hide Track;
 import 'library_service.dart';
 import 'lyrics_service.dart';
 import 'database_service.dart';
+import 'api_service.dart';
+import 'audio_beat_analysis_service.dart';
 
 /// Servicio global de reproducción multimedia con cola y sincronización de letras
 class PlayerService extends ChangeNotifier {
   final Player _player = Player();
+  final AudioBeatAnalysisService _audioAnalysis = AudioBeatAnalysisService();
   LyricsService? _lyricsService;
   DatabaseService? _dbService;
+  ApiService? _apiService;
 
   // ── Cola de Reproducción ──────────────────────────────────────────────────
   List<Track> _queue = [];
@@ -17,13 +21,21 @@ class PlayerService extends ChangeNotifier {
 
   // ── Estado ────────────────────────────────────────────────────────────────
   bool _isPlaying = false;
+  bool _isResolvingStream = false;
+  int _streamRequestId = 0;
+  int _analysisRequestId = 0;
+  bool _analysisInProgress = false;
+  String? _analysisPath;
+  AudioBeatProfile? _audioBeatProfile;
   Duration _position = Duration.zero;
+  Duration? _lastPositionNotification;
   Duration _duration = Duration.zero;
   double _volume = 1.0;
   Track? _currentTrack;
 
   // ── Getters ───────────────────────────────────────────────────────────────
   bool get isPlaying => _isPlaying;
+  bool get isResolvingStream => _isResolvingStream;
   Duration get position => _position;
   Duration get duration => _duration;
   double get volume => _volume;
@@ -31,15 +43,15 @@ class PlayerService extends ChangeNotifier {
   List<Track> get queue => _queue;
   int get currentIndex => _currentIndex;
   Player get player => _player;
+  AudioBeatProfile? get audioBeatProfile => _audioBeatProfile;
 
   String get currentTitle => _currentTrack?.title ?? 'Sin reproducción';
   String get currentArtist => _currentTrack?.artist ?? 'Titofy Music';
   Uint8List? get currentArtwork => _currentTrack?.artwork;
 
-  double get progress =>
-      _duration.inMilliseconds > 0
-          ? (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0)
-          : 0.0;
+  double get progress => _duration.inMilliseconds > 0
+      ? (_position.inMilliseconds / _duration.inMilliseconds).clamp(0.0, 1.0)
+      : 0.0;
 
   PlayerService() {
     _subscribeToStreams();
@@ -53,43 +65,64 @@ class PlayerService extends ChangeNotifier {
     _dbService = service;
   }
 
+  void attachApiService(ApiService service) {
+    _apiService = service;
+  }
+
   final List<dynamic> _subscriptions = [];
 
   void _subscribeToStreams() {
-    _subscriptions.add(_player.stream.playing.listen((playing) {
-      _isPlaying = playing;
-      notifyListeners();
-    }));
+    _subscriptions.add(
+      _player.stream.playing.listen((playing) {
+        _isPlaying = playing;
+        notifyListeners();
+      }),
+    );
 
-    _subscriptions.add(_player.stream.position.listen((pos) {
-      _position = pos;
-      _lyricsService?.updatePosition(pos);
-      notifyListeners();
-    }));
+    _subscriptions.add(
+      _player.stream.position.listen((pos) {
+        _position = pos;
+        _lyricsService?.updatePosition(pos);
 
-    _subscriptions.add(_player.stream.duration.listen((dur) {
-      _duration = dur;
-      notifyListeners();
-    }));
+        // La letra se actualiza siempre, pero la UI no necesita reconstruirse
+        // con cada evento de posición emitido por media_kit.
+        final previous = _lastPositionNotification;
+        final delta = previous == null ? Duration.zero : pos - previous;
+        if (previous == null ||
+            delta.abs() >= const Duration(milliseconds: 100)) {
+          _lastPositionNotification = pos;
+          notifyListeners();
+        }
+      }),
+    );
 
-    _subscriptions.add(_player.stream.volume.listen((vol) {
-      _volume = vol / 100.0;
-      notifyListeners();
-    }));
+    _subscriptions.add(
+      _player.stream.duration.listen((dur) {
+        _duration = dur;
+        notifyListeners();
+      }),
+    );
 
-    _subscriptions.add(_player.stream.completed.listen((completed) {
-      if (completed) next();
-    }));
+    _subscriptions.add(
+      _player.stream.volume.listen((vol) {
+        _volume = vol / 100.0;
+        notifyListeners();
+      }),
+    );
+
+    _subscriptions.add(
+      _player.stream.completed.listen((completed) {
+        if (completed) next();
+      }),
+    );
   }
 
   // ── Reproducción de Pistas ────────────────────────────────────────────────
-  Future<void> playTrack(Track track, {List<Track>? playlist, List<Track>? queue}) async {
-    final file = File(track.path);
-    if (!file.existsSync()) {
-      debugPrint('[PlayerService] El archivo no existe en disco: ${track.path}');
-      return;
-    }
-
+  Future<void> playTrack(
+    Track track, {
+    List<Track>? playlist,
+    List<Track>? queue,
+  }) async {
     final targetList = playlist ?? queue;
     if (targetList != null) {
       _queue = List.from(targetList);
@@ -102,9 +135,82 @@ class PlayerService extends ChangeNotifier {
     }
 
     _currentTrack = track;
+    ++_analysisRequestId;
+    _analysisPath = null;
+    _analysisInProgress = false;
+    _audioBeatProfile = null;
+    // Limpiar inmediatamente letras anteriores para no mezclar letras entre canciones
+    _lyricsService?.clear();
     notifyListeners();
 
-    // Registrar reproduccion en la base de datos local SQLite
+    // ── Caso 1: Pista remota de YouTube (Streaming instantáneo vía backend) ──
+    if (track.isRemote) {
+      final videoId = track.remoteId;
+      if (videoId == null || videoId.isEmpty) {
+        debugPrint(
+          '[PlayerService] Track remoto sin ID de vídeo válido: ${track.path}',
+        );
+        return;
+      }
+
+      if (_apiService == null) {
+        debugPrint('[PlayerService] ApiService no disponible para streaming.');
+        return;
+      }
+
+      final currentReq = ++_streamRequestId;
+      _isResolvingStream = true;
+      notifyListeners();
+
+      try {
+        final streamUrl = await _apiService!.getYouTubeStreamUrl(videoId);
+        if (_streamRequestId != currentReq) {
+          // El usuario seleccionó otra canción antes de resolver esta
+          return;
+        }
+
+        _isResolvingStream = false;
+        notifyListeners();
+
+        if (streamUrl == null || streamUrl.isEmpty) {
+          debugPrint('[PlayerService] No se pudo obtener stream para $videoId');
+          return;
+        }
+
+        // Registrar reproducción en base de datos local SQLite
+        _dbService?.recordPlayback(track.path);
+
+        // Cargar letras sincronizadas para la pista remota
+        _lyricsService?.loadForAudio(
+          track.path,
+          artist: track.artist,
+          title: track.title,
+        );
+
+        await _player.open(Media(streamUrl));
+        await _player.play();
+      } catch (e) {
+        if (_streamRequestId == currentReq) {
+          _isResolvingStream = false;
+          notifyListeners();
+        }
+        debugPrint(
+          '[PlayerService] Error al reproducir streaming de YouTube: $e',
+        );
+      }
+      return;
+    }
+
+    // ── Caso 2: Pista con archivo físico en disco local ──────────────────────
+    final file = File(track.path);
+    if (!file.existsSync()) {
+      debugPrint(
+        '[PlayerService] El archivo no existe en disco: ${track.path}',
+      );
+      return;
+    }
+
+    // Registrar reproducción en la base de datos local SQLite
     _dbService?.recordPlayback(track.path);
 
     // Cargar letras sincronizadas para la pista
@@ -116,6 +222,31 @@ class PlayerService extends ChangeNotifier {
 
     await _player.open(Media(track.path));
     await _player.play();
+  }
+
+  /// Solicita el perfil acústico únicamente cuando un visualizador lo necesita.
+  /// La operación usa caché y nunca bloquea la reproducción.
+  Future<void> prepareAudioBeatProfile() async {
+    final track = _currentTrack;
+    if (track == null || track.isRemote || !File(track.path).existsSync())
+      return;
+    if (_analysisPath == track.path &&
+        (_audioBeatProfile != null || _analysisInProgress))
+      return;
+    _analysisPath = track.path;
+    _analysisInProgress = true;
+    final requestId = ++_analysisRequestId;
+    _audioBeatProfile = null;
+    await _prepareAudioProfile(track.path, requestId);
+  }
+
+  Future<void> _prepareAudioProfile(String path, int requestId) async {
+    final profile = await _audioAnalysis.analyze(path);
+    if (requestId != _analysisRequestId) return;
+    _analysisInProgress = false;
+    if (profile == null) return;
+    _audioBeatProfile = profile;
+    notifyListeners();
   }
 
   Future<void> playPause() async {
@@ -138,7 +269,9 @@ class PlayerService extends ChangeNotifier {
     final target = _position + delta;
     final clamped = target < Duration.zero
         ? Duration.zero
-        : (_duration > Duration.zero && target > _duration ? _duration : target);
+        : (_duration > Duration.zero && target > _duration
+              ? _duration
+              : target);
     await seekTo(clamped);
   }
 

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../core/theme/colors.dart';
 import '../../core/services/database_service.dart';
 import '../../core/services/locale_service.dart';
+import 'import_youtube_dialog.dart';
 
 /// Diálogo modal estilizado para crear una nueva Lista de Reproducción
 class CreatePlaylistDialog extends StatefulWidget {
@@ -191,7 +192,21 @@ class _CreatePlaylistDialogState extends State<CreatePlaylistDialog> {
                 ),
               ),
             ),
-            const SizedBox(height: 24),
+            const SizedBox(height: 14),
+            Center(
+              child: TextButton.icon(
+                onPressed: () async {
+                  Navigator.of(context).pop();
+                  await ImportYouTubeDialog.show(context);
+                },
+                icon: const Icon(Icons.smart_display_outlined, color: Colors.redAccent, size: 16),
+                label: Text(
+                  'O importar lista de YouTube / YT Music',
+                  style: TextStyle(color: c.textSecondary, fontSize: 12.5),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
 
             // Botones de acción
             Row(

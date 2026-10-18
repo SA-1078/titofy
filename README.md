@@ -3,14 +3,50 @@
 **Titofy** es una herramienta integral para obtener, calibrar, transcribir y reproducir letras de canciones (`.lrc`) sincronizadas con archivos locales de audio, además de incluir visualizadores espectrales reactivos en tiempo real.
 
 Incluye:
-- **App Desktop (Flutter)**: Interfaz gráfica nativa oficial **v1.0** para **Linux** y **Windows** que incluye modo karaoke, Studio IA offline, gestión de listas de reproducción y paleta de colores personalizable.
-- **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor (v2.4).
+- **App Desktop (Flutter)**: Interfaz gráfica nativa oficial **v1.1** para **Linux** y **Windows** con renderizado GPU optimizado, análisis de ritmo acústico real, visualizadores desacoplados, Studio IA offline, gestión de listas de reproducción y temas dinámicos.
+- **CLI (Terminal TUI)**: Reproductor de letras con scroll continuo y visualizador FFT de 112 bandas Truecolor (v2.4.1).
 - **Motor Híbrido & API FastAPI**: Búsqueda remota (LRCLIB / NetEase / Genius), calibración mediante **Forced Alignment** acústico y transcripción offline con **faster-whisper** (CTranslate2) en GPU/CPU.
 - **Instaladores Oficiales**: Paquetes de instalación listos para usar en la carpeta `INSTALADORES/` (`Titofy-Setup-v1.0.X.exe` dinámico para Windows y script de integración nativa para Linux).
 
 ---
 
-## ✨ Novedades en CLI v2.4 & Desktop v1.0
+## ✨ Novedades en v2.4.1 (Rendimiento Extremo, Modo Ritmo Real & Fusión Espectro)
+
+- 🚀 **Renderizado Directo GPU en Visualizadores (Zero Widget Rebuilds)**:
+  - **Repintado Directo por Controlador**: Eliminación de las reconstrucciones completas a 60 FPS causadas por `AnimatedBuilder`. `SpectrumPainter`, `CliRainbowSpectrumPainter`, `RhythmSymmetricPainter` y `RhythmRadialPainter` ahora heredan de `CustomPainter(repaint: controller)` repintando directamente en el canvas GPU sin instanciar nuevos objetos pintores en cada frame.
+  - **Aislamiento de Capas (`RepaintBoundary`)**: Encapsulación gráfica de los visualizadores (`ExpandedSpectrumView`, `ExpandedRhythmView`, `ExpandedKaraokeView`, `ExpandedCliSpectrum`, `PlayerFtt`) para evitar invalidar el resto de la interfaz durante la animación activa.
+  - **Optimización Crítica del Modo Radial**: Eliminación de hasta 52 shaders lineales dinámicos calculados por fotograma, sustituidos por interpolación matemática de color de bajo coste computacional y animación aislada de portada.
+  - **Reutilización de Buffers**: `SpectrumController` y `InteractiveAudioWaveform` reutilizan buffers de difusión fijos evitando asignaciones continuas en el garbage collector.
+
+- 🥁 **Modo Ritmo con Detección Acústica Real (`AudioBeatAnalysisService`)**:
+  - Frente a v2.4 (donde el visualizador de ritmo pulsaba por patrones sintéticos sin escuchar la señal), v2.4.1 implementa **extracción acústica real** de energía y transitorios.
+  - **Procesamiento Aislado en Segundo Plano**: Decodificación de audio local con FFmpeg a PCM mono de 8 kHz en un `Isolate` de Flutter, calculando perfiles RMS y golpes de percusión/bajos.
+  - **Caché Inteligente Persistente**: Los perfiles calculados se almacenan en `.titofy_beats.json` indexados por hash de archivo, tamaño y fecha de modificación. Durante la reproducción, el secuenciador sincroniza barras simétricas y pulsos radiales con la posición exacta del reproductor con coste de CPU prácticamente nulo (~0% overhead).
+
+- 🎛️ **Fusión de Modos: Espectro Neón e Híbrido Unificados**:
+  - Se unificaron los modos independientes "Espectro Neón" e "Híbrido" en una única vista coherente con selector interactivo (`Sin Letras` / `Con Letras`) en la barra superior (`SpectrumStyleSelector`).
+  - La preferencia seleccionada se almacena persistentemente en la base de datos SQLite local (`DatabaseService`) para futuras sesiones.
+
+- ⚡ **Desacoplamiento Reactivo del MiniPlayer y NavRail**:
+  - Eliminación de suscripciones globales `context.watch<PlayerService>()` en `AppShell`, `NavRail` y `AppTopBar`.
+  - Reemplazadas por selectores granulares `context.select(...)`, garantizando que las actualizaciones de milisegundos de la posición de audio no reconstruyan la barra lateral, la barra de título ni los menús.
+  - La forma de onda interactiva del reproductor (`InteractiveAudioWaveform`) ahora repinta de forma autónoma en GPU.
+
+- 🎤 **Karaoke Anti-Tirones (Scroll Scheduling Guard)**:
+  - Prevención de llamadas concurrentes o acumuladas a `ScrollController.animateTo()` al cambiar rápidamente de verso, evitando bloqueos y micro-tirones.
+  - Transición suavizada a 320ms con curva `Curves.easeOutCubic` para una lectura fluida en monitores de alta frecuencia de refresco (120Hz/144Hz+).
+
+- 🪟 **Distribución y Empaquetado Windows Completo**:
+  - Inclusión automática del binario nativo `ffmpeg.exe` en la ruta `{app}\backend\bin\` dentro del instalador Inno Setup (`titofy_setup.iss`) y el flujo CI/CD (`build_windows.yml`).
+  - Habilita el análisis acústico de beats y herramientas multimedia en Windows sin requerir instalación manual previa de FFmpeg vía terminal ni dependencias externas.
+
+- 🧱 **Arquitectura Modular Limpia (<550 Líneas)**:
+  - Refactorización integral de los módulos de mayor escala (`expanded_player_view.dart`, `music_page.dart`, `mini_player.dart`, `database_service.dart`, `lyrics_service.dart`) dividiéndolos en subcomponentes especializados y testeables.
+  - Nuevo módulo de notificaciones del sistema (`NotificationService` y `ActivityNotificationsModal`) y diálogo de importación de YouTube (`import_youtube_dialog.dart`).
+
+---
+
+## 📌 Historial: Novedades en CLI v2.4 & Desktop v1.0
 
 - 🎬 **Alineación Inteligente para Videoclips con Intro Extenso (Offset $\ge 3.0$s)**:
   - Solución definitiva para audios extraídos de YouTube o videoclips oficiales que incluyen diálogos, actuaciones o intros musicales largos (como en *Silvestre Dangond - Cásate Conmigo* o *Daddy Yankee - Lovumba*).
@@ -85,10 +121,10 @@ Incluye:
 
 | Módulo | Estado | Descripción |
 | :--- | :---: | :--- |
-| **Titofy Desktop (Flutter)** | 🟢 Estable (v1.0.X) | Reproductor gráfico nativo para Linux y Windows con soporte de karaoke, IA Studio y temas. |
-| **Titofy CLI (Node.js)** | 🟢 Estable (v2.4) | Menú interactivo, reproductor con scroll y visualizador FFT de 112 bandas. |
-| **Backend (Python)** | 🟢 Estable (v2.4) | Motor híbrido con auto-detección de intro, faster-whisper, paquete Windows nativo y API FastAPI. |
-| **Instaladores Oficiales** | 🟢 Disponible | Instalador Inno Setup automatizado para Windows (`Titofy-Setup-v1.0.X.exe`) y script nativo para Linux. |
+| **Titofy Desktop (Flutter)** | 🟢 Estable (v1.1 / v2.4.1) | Reproductor gráfico nativo optimizado para GPU, análisis de ritmo real, visualizadores desacoplados, IA Studio y temas. |
+| **Titofy CLI (Node.js)** | 🟢 Estable (v2.4.1) | Menú interactivo, reproductor con scroll y visualizador FFT de 112 bandas. |
+| **Backend (Python)** | 🟢 Estable (v2.4.1) | Motor híbrido con auto-detección de intro, faster-whisper, paquete Windows nativo y API FastAPI. |
+| **Instaladores Oficiales** | 🟢 Disponible | Instalador Inno Setup automatizado para Windows (`Titofy-Setup-v1.0.X.exe` con FFmpeg integrado) y script nativo para Linux. |
 
 ---
 
@@ -184,7 +220,7 @@ winget install Gyan.FFmpeg
 ```bash
 git clone https://github.com/SA-1078/titofy.git
 cd titofy
-git checkout 2.4
+git checkout 2.4.1
 ```
 
 #### 4. Configurar el Backend (Python)
@@ -264,6 +300,6 @@ Consulta el archivo [LICENSE](LICENSE) para más detalles.
 
 ---
 
-*Titofy v2.4 & Titofy Desktop v1.0 — Letras con la velocidad de la nube y la potencia de tu GPU local.*
+*Titofy v2.4.1 & Titofy Desktop v1.1 — Letras con la velocidad de la nube y la potencia de tu GPU local.*
 
 Titofy - Santiago Colimba. Todos los derechos reservados ©2026.

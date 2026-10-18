@@ -1,5 +1,7 @@
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:metadata_god/metadata_god.dart';
 import 'database_service.dart';
@@ -30,6 +32,15 @@ class Track {
     final s = duration.inSeconds.remainder(60).toString().padLeft(2, '0');
     return '$m:$s';
   }
+
+  /// Indica si la pista es una referencia remota (ej: YouTube) sin archivo local garantizado
+  bool get isRemote => path.startsWith('youtube:');
+
+  /// Identificador del servicio remoto (ej: video_id)
+  String? get remoteId => isRemote ? path.substring(8) : null;
+
+  /// Indica si existe un archivo físico de audio accesible en disco
+  bool get hasLocalAudio => !isRemote && File(path).existsSync();
 }
 
 /// Servicio de biblioteca musical exclusivo para archivos locales reales
@@ -40,10 +51,32 @@ class LibraryService extends ChangeNotifier {
   String? _scanFolder;
   DatabaseService? _dbService;
 
+  final TextEditingController searchController = TextEditingController();
+  String _searchQuery = '';
+  String get searchQuery => _searchQuery;
+
+  void setSearchQuery(String q) {
+    _searchQuery = q;
+    if (searchController.text != q) {
+      searchController.value = TextEditingValue(
+        text: q,
+        selection: TextSelection.collapsed(offset: q.length),
+      );
+    }
+    notifyListeners();
+  }
+
   List<Track> get tracks => _tracks;
   List<Track> get realTracks => _tracks;
   bool get isScanning => _isScanning;
-  String? get scannedFolder => _scanFolder;
+  String? get scannedFolder {
+    if (_scanFolder != null && _scanFolder!.isNotEmpty) return _scanFolder;
+    final fromDb = _dbService?.getSetting('music_folder');
+    if (fromDb != null && fromDb.isNotEmpty) return fromDb;
+    const defaultPath = '/home/santiago007/Música';
+    if (Directory(defaultPath).existsSync()) return defaultPath;
+    return null;
+  }
 
   List<Track> get topCharts => _tracks.take(12).toList();
   List<Track> get favoriteTracks => getFavoriteTracks();
@@ -143,9 +176,27 @@ class LibraryService extends ChangeNotifier {
 
   List<Track> getTracksForPlaylist(int playlistId) {
     if (_dbService != null) {
-      final paths = _dbService!.getPlaylistTrackPaths(playlistId);
+      final rows = _dbService!.getTracksForPlaylistRaw(playlistId);
       final trackMap = {for (final t in _tracks) t.path: t};
-      return paths.map((p) => trackMap[p]).whereType<Track>().toList();
+
+      final result = <Track>[];
+      for (final r in rows) {
+        final path = r['path'] as String;
+        if (trackMap.containsKey(path)) {
+          result.add(trackMap[path]!);
+        } else {
+          // Track remoto (ej: youtube:id) o archivo local pendiente de escaneo
+          result.add(Track(
+            path: path,
+            title: r['title'] as String? ?? 'Sin título',
+            artist: r['artist'] as String? ?? 'Artista desconocido',
+            album: r['album'] as String? ?? 'YouTube',
+            duration: Duration(milliseconds: (r['duration_ms'] as int?) ?? 0),
+            isFavorite: (r['is_favorite'] as int?) == 1,
+          ));
+        }
+      }
+      return result;
     }
     return [];
   }
@@ -176,6 +227,23 @@ class LibraryService extends ChangeNotifier {
       return _dbService!.isFavorite(track.path);
     }
     return _favorites.contains(track.path);
+  }
+
+  /// Registra o actualiza una pista local en la lista en memoria y notifica a la UI
+  void registerLocalTrack(Track track) {
+    final idx = _tracks.indexWhere((t) => t.path == track.path);
+    if (idx != -1) {
+      _tracks[idx] = track;
+    } else {
+      _tracks.add(track);
+    }
+    notifyListeners();
+  }
+
+  /// Reemplaza una referencia remota por la pista descargada localmente
+  void replaceRemoteTrack({required String oldRemotePath, required Track newTrack}) {
+    _tracks.removeWhere((t) => t.path == oldRemotePath);
+    registerLocalTrack(newTrack);
   }
 
   /// Selección interactiva de carpeta desde Ajustes

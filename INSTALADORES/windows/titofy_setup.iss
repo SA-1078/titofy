@@ -56,6 +56,8 @@ Source: "..\..\desktop\build\windows\x64\runner\Release\desktop.exe"; DestDir: "
 Source: "..\..\desktop\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: "desktop.exe,backend\*"
 ; Ejecutable del backend FastAPI compilado
 Source: "..\..\desktop\build\windows\x64\runner\Release\backend\api_server.exe"; DestDir: "{app}\backend"; Flags: ignoreversion
+; FFmpeg se usa para generar perfiles acústicos locales del Modo Ritmo
+Source: "..\..\desktop\build\windows\x64\runner\Release\backend\bin\ffmpeg.exe"; DestDir: "{app}\backend\bin"; Flags: ignoreversion
 ; Backend de IA Python y scripts (excluye ejecutables duplicados, entornos virtuales o caches)
 Source: "..\..\backend\*"; DestDir: "{app}\backend"; Flags: ignoreversion recursesubdirs createallsubdirs; Excludes: ".venv,venv,__pycache__,*.pyc,logs\*,data\*,dist,build,*.spec,*.exe"
 

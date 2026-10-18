@@ -3,24 +3,27 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
-import 'windows/windows.dart';
+import 'backend_process_manager.dart';
+import 'windows/windows_backend_service.dart';
 
 /// Servicio de conexión con la API local de Titofy (FastAPI en http://127.0.0.1:8642)
 class ApiService extends ChangeNotifier {
   static const String defaultUrl = 'http://127.0.0.1:8642';
   String _baseUrl = defaultUrl;
   final http.Client _client = http.Client();
+  final BackendProcessManager _processManager = BackendProcessManager();
 
   bool _isOnline = false;
   bool _isStartingBackend = false;
   Map<String, dynamic>? _lastHealth;
   Timer? _healthTimer;
-  Process? _backendProcess;
+  String? _lastErrorMessage;
 
   bool get isOnline => _isOnline;
   bool get isStartingBackend => _isStartingBackend;
   Map<String, dynamic>? get lastHealth => _lastHealth;
   String get baseUrl => _baseUrl;
+  String? get lastErrorMessage => _lastErrorMessage ?? _processManager.lastErrorMessage;
 
   ApiService({String? baseUrl}) {
     if (baseUrl != null) _baseUrl = baseUrl;
@@ -74,7 +77,7 @@ class ApiService extends ChangeNotifier {
     return await ensureServerRunning();
   }
 
-  // ── Auto-arranque del Backend Python con detección de .venv ──────────────
+  // ── Auto-arranque del Backend Python ──────────────────────────────────────
   Future<bool> ensureServerRunning() async {
     if (await checkHealth() != null) return true;
 
@@ -82,7 +85,7 @@ class ApiService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final backendDir = _resolveBackendDirectory();
+      final backendDir = _processManager.resolveBackendDirectory();
       if (backendDir == null) {
         debugPrint('[ApiService] No se pudo encontrar la carpeta backend');
         _isStartingBackend = false;
@@ -90,65 +93,26 @@ class ApiService extends ChangeNotifier {
         return false;
       }
 
-      // Si el puerto está ocupado por un proceso zombie previo que no responde, liberarlo
-      await _freePort(8642);
+      await _processManager.startProcess(
+        backendDir: backendDir,
+        onStdout: (data) => debugPrint('[FastAPI-stdout] $data'),
+        onStderr: (data) {
+          debugPrint('[FastAPI-stderr] $data');
+          _lastErrorMessage = data.trim();
+          notifyListeners();
+        },
+        onExit: (code) {
+          debugPrint('[ApiService] Backend finalizó con código: $code');
+          _isOnline = false;
+          notifyListeners();
+        },
+      );
 
-      final isWin = Platform.isWindows;
-      final exeServer = File('$backendDir/api_server.exe');
-
-      if (isWin && exeServer.existsSync()) {
-        debugPrint('[ApiService] Iniciando ejecutable autónomo de FastAPI en Windows...');
-        _backendProcess = await WindowsBackendService().startBackendProcess(backendDir, pid);
-        Future.delayed(
-          const Duration(milliseconds: 1500),
-          () => _syncLocalBackendCodeToTemp(backendDir),
-        );
-      } else {
-        final pythonBin = _resolvePythonExecutable(backendDir);
-        final serverScript = '$backendDir/api_server.py';
-        final venvDir = '$backendDir/.venv';
-        final venvBinDir = isWin ? '$backendDir\\.venv\\Scripts' : '$venvDir/bin';
-        final pathSep = isWin ? ';' : ':';
-
-        debugPrint('[ApiService] Iniciando backend con Python: $pythonBin $serverScript (cwd: $backendDir)');
-
-        _backendProcess = await Process.start(
-          pythonBin,
-          ['-u', serverScript, '--parent-pid', pid.toString()],
-          workingDirectory: backendDir,
-          environment: {
-            'VIRTUAL_ENV': venvDir,
-            'PATH': '$venvBinDir$pathSep${Platform.environment['PATH'] ?? ''}',
-            'PYTHONPATH': backendDir,
-            'PYTHONUNBUFFERED': '1',
-          },
-          mode: ProcessStartMode.normal,
-        );
-      }
-
-      _backendProcess?.stdout.transform(utf8.decoder).listen((data) {
-        debugPrint('[FastAPI-stdout] $data');
-      });
-      _backendProcess?.stderr.transform(utf8.decoder).listen((data) {
-        debugPrint('[FastAPI-stderr] $data');
-        _lastErrorMessage = data.trim();
-        notifyListeners();
-      });
-
-      _backendProcess?.exitCode.then((code) {
-        debugPrint('[ApiService] Backend process finalizó con código: $code');
-        if (code != 0 && (_lastErrorMessage == null || _lastErrorMessage!.isEmpty)) {
-          _lastErrorMessage = 'El backend se cerró inesperadamente (código: $code)';
-        }
-        _isOnline = false;
-        notifyListeners();
-      });
-
-      // Esperar hasta 15 segundos a que la API responda (30 iteraciones x 500ms)
+      // Esperar hasta 15 segundos a que la API responda
       for (int i = 0; i < 30; i++) {
         await Future.delayed(const Duration(milliseconds: 500));
         if (await checkHealth() != null) {
-          _syncLocalBackendCodeToTemp(backendDir);
+          _processManager.syncLocalBackendCodeToTemp(backendDir);
           if (Platform.isWindows) {
             await WindowsBackendService().warmupWindowsPatches(_baseUrl, _client);
           }
@@ -168,61 +132,6 @@ class ApiService extends ChangeNotifier {
     return false;
   }
 
-  void _syncLocalBackendCodeToTemp(String backendDir) {
-    if (Platform.isWindows) {
-      WindowsBackendService().syncAndPatchMei(backendDir);
-    }
-  }
-
-
-  String? _lastErrorMessage;
-  String? get lastErrorMessage => _lastErrorMessage;
-
-  String? _resolveBackendDirectory() {
-    final exeDir = File(Platform.resolvedExecutable).parent.path;
-    final currentDir = Directory.current.path;
-    final candidates = [
-      '$exeDir/backend',
-      exeDir,
-      '$exeDir/../backend',
-      '$currentDir/backend',
-      currentDir,
-      '$currentDir/../backend',
-      '$currentDir/../../backend',
-      if (Platform.isWindows && Platform.environment['LOCALAPPDATA'] != null)
-        '${Platform.environment['LOCALAPPDATA']}/Programs/Titofy/backend',
-      '/home/santiago007/Documentos/titofy/backend',
-      '/home/santiago007/.local/share/titofy/backend',
-    ];
-
-    for (final c in candidates) {
-      final script = File('$c/api_server.py');
-      final exe = File('$c/api_server.exe');
-      if (script.existsSync() || exe.existsSync()) return Directory(c).absolute.path;
-    }
-    return null;
-  }
-
-  String _resolvePythonExecutable(String backendDir) {
-    // 1. Variable de entorno
-    final envPython = Platform.environment['PYTHON'];
-    if (envPython != null && File(envPython).existsSync()) return envPython;
-
-    // 2. Virtualenv del backend (.venv)
-    final isWin = Platform.isWindows;
-    final venvBin = isWin
-        ? '$backendDir/.venv/Scripts/python.exe'
-        : '$backendDir/.venv/bin/python';
-    if (File(venvBin).existsSync()) return venvBin;
-
-    final venvAlt = isWin
-        ? '$backendDir/venv/Scripts/python.exe'
-        : '$backendDir/venv/bin/python';
-    if (File(venvAlt).existsSync()) return venvAlt;
-
-    return isWin ? 'python' : 'python3';
-  }
-
   // ── /lyrics/resolve (Motor Híbrido: LRCLIB → Lyrics.ovh + Align → Whisper) ──
   Future<Map<String, dynamic>?> resolveLyrics({
     String? artist,
@@ -235,8 +144,8 @@ class ApiService extends ChangeNotifier {
     String? outputPath,
     bool force = false,
   }) async {
-    final bDir = _resolveBackendDirectory();
-    if (bDir != null) _syncLocalBackendCodeToTemp(bDir);
+    final bDir = _processManager.resolveBackendDirectory();
+    if (bDir != null) _processManager.syncLocalBackendCodeToTemp(bDir);
     try {
       final payload = {
         'artist': artist,
@@ -277,6 +186,96 @@ class ApiService extends ChangeNotifier {
     }
   }
 
+  // ── /youtube/playlist (Extracción de metadatos de YouTube / YT Music) ──────
+  Future<Map<String, dynamic>?> extractYouTubePlaylist(String url) async {
+    final bDir = _processManager.resolveBackendDirectory();
+    if (bDir != null) _processManager.syncLocalBackendCodeToTemp(bDir);
+
+    try {
+      final res = await _client
+          .post(
+            Uri.parse('$_baseUrl/youtube/playlist'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'url': url.trim()}),
+          )
+          .timeout(const Duration(seconds: 40));
+
+      if (res.statusCode == 200) {
+        return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      } else {
+        try {
+          final errData = jsonDecode(utf8.decode(res.bodyBytes));
+          throw Exception(errData['detail'] ?? 'Error al procesar el enlace de YouTube');
+        } catch (e) {
+          if (!e.toString().contains('FormatException')) rethrow;
+          throw Exception('Error del servidor (${res.statusCode})');
+        }
+      }
+    } catch (e) {
+      debugPrint('[ApiService] Error en extractYouTubePlaylist: $e');
+      rethrow;
+    }
+  }
+
+  // ── /youtube/stream (Obtención de URL de streaming directo de audio) ───────
+  Future<String?> getYouTubeStreamUrl(String videoId) async {
+    final cleanId = videoId.replaceFirst('youtube:', '').trim();
+    try {
+      final res = await _client
+          .post(
+            Uri.parse('$_baseUrl/youtube/stream'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({'video_id': cleanId}),
+          )
+          .timeout(const Duration(seconds: 25));
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+        return data['stream_url'] as String?;
+      } else {
+        final err = jsonDecode(utf8.decode(res.bodyBytes));
+        throw Exception(err['detail'] ?? 'Error al obtener flujo de audio');
+      }
+    } catch (e) {
+      debugPrint('[ApiService] Error en getYouTubeStreamUrl: $e');
+      rethrow;
+    }
+  }
+
+  // ── /youtube/download (Descarga de audio en segundo plano) ─────────────────
+  Future<Map<String, dynamic>?> downloadYouTubeTrack({
+    required String videoId,
+    String? title,
+    String? artist,
+    String? targetFolder,
+  }) async {
+    final cleanId = videoId.replaceFirst('youtube:', '').trim();
+    try {
+      final res = await _client
+          .post(
+            Uri.parse('$_baseUrl/youtube/download'),
+            headers: {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'video_id': cleanId,
+              'title': title,
+              'artist': artist,
+              'target_folder': targetFolder,
+            }),
+          )
+          .timeout(const Duration(minutes: 5));
+
+      if (res.statusCode == 200) {
+        return jsonDecode(utf8.decode(res.bodyBytes)) as Map<String, dynamic>;
+      } else {
+        final err = jsonDecode(utf8.decode(res.bodyBytes));
+        throw Exception(err['detail'] ?? 'Error al descargar audio');
+      }
+    } catch (e) {
+      debugPrint('[ApiService] Error en downloadYouTubeTrack: $e');
+      rethrow;
+    }
+  }
+
   // ── /transcribe (Whisper local en background) ────────────────────────────
   Future<String?> transcribe({
     required String audioPath,
@@ -285,8 +284,8 @@ class ApiService extends ChangeNotifier {
     String? outputPath,
     bool wordMode = true,
   }) async {
-    final bDir = _resolveBackendDirectory();
-    if (bDir != null) _syncLocalBackendCodeToTemp(bDir);
+    final bDir = _processManager.resolveBackendDirectory();
+    if (bDir != null) _processManager.syncLocalBackendCodeToTemp(bDir);
     try {
       final res = await _client
           .post(
@@ -438,24 +437,11 @@ class ApiService extends ChangeNotifier {
     }
   }
 
-  /// Libera el puerto matando cualquier proceso huérfano si el backend anterior quedó congelado
-  Future<void> _freePort(int port) async {
-    try {
-      if (Platform.isWindows) {
-        await WindowsBackendService().freePort(port);
-      } else {
-        // En Linux/macOS, terminar cualquier proceso ocupando el puerto TCP
-        await Process.run('fuser', ['-k', '$port/tcp']);
-      }
-      await Future.delayed(const Duration(milliseconds: 250));
-    } catch (_) {}
-  }
-
   @override
   void dispose() {
     _healthTimer?.cancel();
     _client.close();
-    _backendProcess?.kill();
+    _processManager.killProcess();
     super.dispose();
   }
 }

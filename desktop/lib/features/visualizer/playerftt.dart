@@ -24,16 +24,10 @@ class PlayerFtt extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     if (controller != null) {
-      return AnimatedBuilder(
-        animation: controller!,
-        builder: (context, _) => CustomPaint(
+      return RepaintBoundary(
+        child: CustomPaint(
           size: Size(double.infinity, height ?? double.infinity),
-          painter: SpectrumPainter(
-            levels: controller!.levels,
-            peaks: controller!.peaks,
-            beatEnergy: controller!.beatEnergy,
-            theme: controller!.theme,
-          ),
+          painter: SpectrumPainter.fromController(controller!),
         ),
       );
     }

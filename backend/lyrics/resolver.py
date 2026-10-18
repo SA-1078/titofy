@@ -10,14 +10,14 @@ Decide la fuente más económica y confiable para obtener letras sincronizadas:
 3. Nivel 3: Transcripción Whisper local offline (faster-whisper)
 """
 
+from __future__ import annotations
+
 import os
-import sys
 import asyncio
-import tempfile
 from typing import Any
 
 from .models import LyricData, LyricLine, LyricSource
-from .normalizer import clean_query, extract_artist_title_from_filename, round_duration
+from .normalizer import clean_query, extract_artist_title_from_filename, round_duration, clean_song_metadata
 from .fingerprint import identify_audio
 from .providers.base import LyricsProvider
 from .providers.lrclib import LrclibProvider
@@ -25,6 +25,8 @@ from .providers.netease import NeteaseProvider
 from .providers.lyrist import LyristProvider
 from .providers.genius import GeniusProvider
 from .providers.lyrics_ovh import LyricsOvhProvider
+from .alignment import calibrate_synced_lyrics, align_plain_lyrics, generate_with_whisper
+from .storage import save_lrc_if_requested
 
 try:
     from logger import get_logger
@@ -85,7 +87,6 @@ class LyricsResolver:
                 if fp_dur and not dur_int:
                     dur_int = fp_dur
 
-            # Si aún faltan, extraer del nombre de archivo
             if (not artist or not clean_query(artist)) or (not title or not clean_query(title)):
                 extracted_artist, extracted_title = extract_artist_title_from_filename(audio_path)
                 if not artist or not clean_query(artist):
@@ -93,12 +94,26 @@ class LyricsResolver:
                 if not title or not clean_query(title):
                     title = extracted_title
 
-        from lyrics.normalizer import clean_song_metadata
         clean_artist, clean_title = clean_song_metadata(artist, title)
         if not clean_title:
             clean_title = "Unknown Title"
 
         log.info(f"[Titofy Resolver] Resolviendo letra para: '{clean_artist}' - '{clean_title}' (mode={mode}, dur={dur_int}, force={force})")
+
+        # Auto-descarga si audio_path es de YouTube y se requiere archivo físico para Whisper
+        if audio_path and audio_path.startswith("youtube:") and mode in ("hybrid", "online_align", "ai_only"):
+            try:
+                from youtube.downloader import download_youtube_audio_track
+                dl_info = download_youtube_audio_track(
+                    video_id=audio_path,
+                    title=clean_title if clean_title != "Unknown Title" else None,
+                    artist=clean_artist or None,
+                )
+                if dl_info and dl_info.get("file_path") and os.path.exists(dl_info["file_path"]):
+                    audio_path = dl_info["file_path"]
+                    log.info(f"[Titofy Resolver] Audio descargado transparentemente para Whisper: {audio_path}")
+            except Exception as dl_err:
+                log.warning(f"[Titofy Resolver] No se pudo auto-descargar audio youtube: {dl_err}")
 
         # Parche universal en RAM para faster-whisper y WhisperModel
         try:
@@ -132,9 +147,6 @@ class LyricsResolver:
                         f"(sincronizada={res.is_synced}, {len(res.lines)} líneas)"
                     )
 
-                    # Si la letra ya está sincronizada (Fuente 1 / Fuente 2):
-                    # En modo 'online_align' o 'hybrid', o en 'auto' si hay modelo descargado:
-                    # calibrar desfase de inicio (intro/videoclip) contra el audio local
                     if res.is_synced:
                         from whisper_engine.loader import is_any_model_downloaded, get_best_available_model
                         should_align = (
@@ -143,21 +155,21 @@ class LyricsResolver:
                         )
                         if should_align and audio_path and os.path.exists(audio_path):
                             effective_model = get_best_available_model(model_name)
-                            log.info(f"[Titofy] Modo '{mode}' con modelo '{effective_model}': ejecutando calibración acústica con audio local {audio_path}...")
+                            log.info(f"[Titofy] Modo '{mode}' con modelo '{effective_model}': calibración acústica con audio local...")
                             try:
                                 calibrated = await asyncio.to_thread(
-                                    self._calibrate_synced, res, audio_path, model_name=effective_model, language=language
+                                    calibrate_synced_lyrics, res, audio_path, model_name=effective_model, language=language
                                 )
                                 if calibrated and calibrated.is_synced and len(calibrated.lines) > 0:
                                     calibrated.title = res.title or clean_title
                                     calibrated.artist = res.artist or clean_artist
-                                    self._save_lrc_if_requested(calibrated, output_lrc, audio_path, force=force)
+                                    save_lrc_if_requested(calibrated, output_lrc, audio_path, force=force)
                                     return calibrated
                             except Exception as e:
-                                log.warning(f"[Titofy] Calibración con audio falló ({e}). Entregando letra original.")
-                                self._save_lrc_if_requested(res, output_lrc, audio_path, force=force)
+                                log.warning(f"[Titofy] Calibración falló ({e}). Entregando letra original.")
+                                save_lrc_if_requested(res, output_lrc, audio_path, force=force)
                                 return res
-                        self._save_lrc_if_requested(res, output_lrc, audio_path, force=force)
+                        save_lrc_if_requested(res, output_lrc, audio_path, force=force)
                         return res
 
             # ── FASE 2 (Nivel 2): Proveedores Texto Plano (Fuente 3) ──────────────────
@@ -181,13 +193,13 @@ class LyricsResolver:
                         log.info(f"[Titofy Nivel 2] Alineando letra plana con audio local vía Whisper ({effective_model})...")
                         try:
                             aligned = await asyncio.to_thread(
-                                self._align, pres, audio_path, model_name=effective_model, language=language
+                                align_plain_lyrics, pres, audio_path, model_name=effective_model, language=language
                             )
                             if aligned and aligned.is_synced and len(aligned.lines) > 0:
                                 aligned.title = pres.title or clean_title
                                 aligned.artist = pres.artist or clean_artist
                                 aligned.provider = f"{pres.provider} · Alineada con Audio"
-                                self._save_lrc_if_requested(aligned, output_lrc, audio_path, force=force)
+                                save_lrc_if_requested(aligned, output_lrc, audio_path, force=force)
                                 return aligned
                         except Exception as e:
                             log.warning(f"Forced Alignment Nivel 2 falló ({e}).")
@@ -195,21 +207,20 @@ class LyricsResolver:
                                 continue
                             if mode == "hybrid":
                                 log.info(f"[Titofy Híbrido] Alineación falló; entregando texto de {pres.provider}.")
-                                self._save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
+                                save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
                                 return pres
 
                     if should_align and mode == "online_align":
                         continue
 
-                    self._save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
+                    save_lrc_if_requested(pres, output_lrc, audio_path, force=force)
                     return pres
 
-        # Si el modo es solo online o auto sin resultado online, retornar None limpiamente
         if mode in ("online_only", "auto"):
-            log.info(f"[Titofy] No se encontró letra online para '{clean_artist} - {clean_title}'. Finalizando sin sobrecargar CPU.")
+            log.info(f"[Titofy] No se encontró letra online para '{clean_artist} - {clean_title}'. Finalizando.")
             return None
 
-        # ── FASE 3 (Nivel 3): Whisper Local Offline (si mode == 'ai_only' o fallback en 'hybrid') ──
+        # ── FASE 3 (Nivel 3): Whisper Local Offline ──
         if mode in ("ai_only", "hybrid"):
             if not audio_path or not os.path.exists(audio_path):
                 if mode == "hybrid":
@@ -221,7 +232,7 @@ class LyricsResolver:
 
             log.info(f"[Titofy Nivel 3] Iniciando transcripción con Whisper local ({model_name})...")
             generated = await asyncio.to_thread(
-                self._generate_with_whisper,
+                generate_with_whisper,
                 audio_path=audio_path,
                 title=clean_title,
                 artist=clean_artist,
@@ -230,7 +241,7 @@ class LyricsResolver:
                 language=language,
             )
 
-            self._save_lrc_if_requested(generated, output_lrc, audio_path, force=force)
+            save_lrc_if_requested(generated, output_lrc, audio_path, force=force)
             return generated
 
         return None
@@ -249,7 +260,6 @@ class LyricsResolver:
     ) -> LyricData | None:
         """
         Versión síncrona retrocompatible de resolve().
-        Ejecuta resolve_async() en el bucle de eventos apropiado.
         """
         try:
             loop = asyncio.get_running_loop()
@@ -273,10 +283,9 @@ class LyricsResolver:
                         force=force,
                     ),
                 )
-                res: LyricData | None = fut.result()
-                return res
+                return fut.result()
         else:
-            res_sync: LyricData | None = asyncio.run(
+            return asyncio.run(
                 self.resolve_async(
                     artist=artist,
                     title=title,
@@ -289,267 +298,17 @@ class LyricsResolver:
                     force=force,
                 )
             )
-            return res_sync
 
-    def _calibrate_synced(
-        self,
-        data: LyricData,
-        audio_path: str,
-        model_name: str = "small",
-        language: str = "auto",
-    ) -> LyricData:
-        """
-        Calibra letras que YA vienen sincronizadas online contra el audio local.
-        Detecta el desfase de inicio (intro/videoclip) sin alterar la métrica de LRCLIB.
-        """
-        if not data.lines:
-            return data
+    # Métodos delegados para retrocompatibilidad
+    def _calibrate_synced(self, data: LyricData, audio_path: str, model_name: str = "small", language: str = "auto") -> LyricData:
+        return calibrate_synced_lyrics(data, audio_path, model_name, language)
 
-        first_line = next(
-            (l for l in data.lines if l.text and l.text.strip() and not l.text.strip().lower().startswith("(intro")),
-            None,
-        )
-        if not first_line:
-            return data
+    def _align(self, data: LyricData, audio_path: str, model_name: str = "base", language: str = "auto") -> LyricData:
+        return align_plain_lyrics(data, audio_path, model_name, language)
 
-        original_start = float(first_line.start)
-
-        try:
-            from whisper_engine.loader import detect_device, load_whisper_model
-            device, _ = detect_device()
-            model, _ = load_whisper_model(model_name, device=device, compute_type="auto")
-
-            effective_lang = None if (not language or language == "auto") else language
-            result = model.transcribe(audio_path, language=effective_lang, word_timestamps=True)
-
-            first_vocal_time: float | None = None
-            if isinstance(result, tuple) and len(result) == 2:
-                segments_gen, _ = result
-                for s in segments_gen:
-                    text = str(getattr(s, "text", "") or "").strip()
-                    if text and len(text) >= 3:
-                        s_words = getattr(s, "words", None)
-                        if s_words:
-                            for w in s_words:
-                                if getattr(w, "word", "").strip():
-                                    first_vocal_time = float(getattr(w, "start", s.start))
-                                    break
-                        if first_vocal_time is None:
-                            first_vocal_time = float(s.start)
-                        break
-
-            if first_vocal_time is not None:
-                offset = round(first_vocal_time - original_start, 2)
-                if abs(offset) >= 3.0:
-                    try:
-                        log.info(
-                            f"[Titofy Calibración] Desfase grande de {offset:+.2f}s. "
-                            "Alineando la letra completa contra el audio local..."
-                        )
-                        aligned = self._align(data, audio_path, model_name, language)
-                        if aligned.is_synced and aligned.lines:
-                            aligned.provider = f"{data.provider} · Alineada con audio"
-                            return aligned
-                    except Exception as exc:
-                        log.warning(f"[Titofy Calibración] Alineación completa falló ({exc}). Usando ajuste global.")
-                if abs(offset) >= 0.6 and abs(offset) <= 60.0:
-                    log.info(
-                        f"[Titofy Calibración] Desfase detectado de {offset:+.2f}s "
-                        f"(audio: {first_vocal_time:.2f}s vs letra: {original_start:.2f}s). "
-                        f"Aplicando a {len(data.lines)} líneas..."
-                    )
-                    from lyrics.models import LyricLine
-                    calibrated_lines: list[LyricLine] = []
-                    if first_vocal_time >= 6.0:
-                        calibrated_lines.append(LyricLine(start=0.0, text="(intro)"))
-
-                    for l in data.lines:
-                        new_start = max(0.0, round(l.start + offset, 2))
-                        calibrated_lines.append(LyricLine(start=new_start, text=l.text))
-
-                    data.lines = calibrated_lines
-                    data.source = LyricSource.ONLINE_ALIGNED
-                    data.provider = f"{data.provider} · Calibrada ({offset:+.1f}s)"
-                    return data
-                else:
-                    log.info(
-                        f"[Titofy Calibración] Audio local coincide con letra online "
-                        f"({offset:+.2f}s). Marcas de tiempo de LRCLIB verificadas."
-                    )
-                    data.provider = f"{data.provider} · Verificada"
-                    return data
-        except Exception as e:
-            log.warning(f"[Titofy Calibración] Error en calibración acústica ({e}). Conservando sincronización original.")
-
-        return data
-
-    def _align(
-        self,
-        data: LyricData,
-        audio_path: str,
-        model_name: str = "base",
-        language: str = "auto",
-    ) -> LyricData:
-        """
-        Ejecuta Forced Alignment (alineación forzada) del texto plano contra el audio.
-        """
-        lyrics_text = data.get_plain_text()
-        if not lyrics_text.strip():
-            raise ValueError("Texto de letra vacío para alineación")
-
-        effective_lang = data.language if (data.language and data.language != "auto") else language
-        if effective_lang == "auto":
-            effective_lang = "es"
-
-        with tempfile.NamedTemporaryFile(suffix=".lrc", delete=False) as tmp:
-            tmp_lrc_path = tmp.name
-
-        try:
-            try:
-                from whisper_engine.loader import get_best_available_model
-                effective_model = get_best_available_model(model_name)
-            except Exception:
-                effective_model = model_name
-
-            try:
-                from whisper_engine.align import align_lyrics
-            except ImportError:
-                from whisper_align import align_lyrics
-
-            align_lyrics(
-                audio_path=audio_path,
-                lyrics_text=lyrics_text,
-                output_path=tmp_lrc_path,
-                model_name=effective_model,
-                language=effective_lang,
-            )
-
-            if os.path.exists(tmp_lrc_path):
-                with open(tmp_lrc_path, "r", encoding="utf-8") as f:
-                    lrc_content = f.read()
-
-                aligned_data = LyricData.from_lrc_string(
-                    lrc_text=lrc_content,
-                    title=data.title,
-                    artist=data.artist,
-                    duration=data.duration,
-                    source=LyricSource.ONLINE_ALIGNED,
-                    language=effective_lang,
-                    album=data.album,
-                    provider=data.provider,
-                )
-                aligned_data.plain_lyrics = lyrics_text
-                return aligned_data
-        finally:
-            if os.path.exists(tmp_lrc_path):
-                try:
-                    os.remove(tmp_lrc_path)
-                except OSError:
-                    pass
-
-        raise RuntimeError("Fallo al generar archivo de alineación forzada")
-
-    def _generate_with_whisper(
-        self,
-        audio_path: str,
-        title: str,
-        artist: str,
-        duration: int | None,
-        model_name: str = "small",
-        language: str = "auto",
-    ) -> LyricData:
-        """
-        Ejecuta la transcripción completa de Whisper local.
-        """
-        with tempfile.NamedTemporaryFile(suffix=".lrc", delete=False) as tmp:
-            tmp_lrc_path = tmp.name
-
-        try:
-            try:
-                from whisper_engine.transcribe import transcribe_audio
-            except ImportError:
-                from whisper_transcribe import transcribe_audio
-
-            transcribe_audio(
-                audio_path=audio_path,
-                output_path=tmp_lrc_path,
-                model_name=model_name,
-                language=language,
-                verbose=False,
-            )
-
-            if os.path.exists(tmp_lrc_path):
-                with open(tmp_lrc_path, "r", encoding="utf-8") as f:
-                    lrc_content = f.read()
-
-                return LyricData.from_lrc_string(
-                    lrc_text=lrc_content,
-                    title=title,
-                    artist=artist,
-                    duration=duration,
-                    source=LyricSource.AI_GENERATED,
-                    language=language if language != "auto" else None,
-                    provider="whisper_local",
-                )
-        finally:
-            if os.path.exists(tmp_lrc_path):
-                try:
-                    os.remove(tmp_lrc_path)
-                except OSError:
-                    pass
-
-        raise RuntimeError(f"Fallo al transcribir con Whisper local: {audio_path}")
+    def _generate_with_whisper(self, audio_path: str, title: str, artist: str, duration: int | None, model_name: str = "small", language: str = "auto") -> LyricData:
+        return generate_with_whisper(audio_path, title, artist, duration, model_name, language)
 
     @staticmethod
     def _save_lrc_if_requested(data: LyricData, output_lrc: str | None, audio_path: str | None, force: bool = False):
-        cli_lrc_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "cli", "lrc"))
-        backend_lrc_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "lrc"))
-
-        for d in [cli_lrc_dir, backend_lrc_dir]:
-            try:
-                os.makedirs(d, exist_ok=True)
-            except Exception:
-                pass
-
-        if audio_path:
-            # Eliminar cualquier archivo .lrc extraviado en la carpeta de música del usuario
-            stray_music_lrc = os.path.splitext(audio_path)[0] + ".lrc"
-            if os.path.exists(stray_music_lrc):
-                try:
-                    os.remove(stray_music_lrc)
-                    log.info(f"Eliminado archivo .lrc residual de la carpeta de música: {stray_music_lrc}")
-                except Exception as e:
-                    log.warning(f"No se pudo eliminar .lrc en carpeta de música: {e}")
-
-            audio_base = os.path.splitext(os.path.basename(audio_path))[0]
-            for lrc_dir in [cli_lrc_dir, backend_lrc_dir]:
-                target = os.path.join(lrc_dir, f"{audio_base}.lrc")
-                if force and os.path.exists(target):
-                    try:
-                        os.remove(target)
-                    except OSError:
-                        pass
-                try:
-                    with open(target, "w", encoding="utf-8") as f:
-                        f.write(data.to_lrc())
-                    log.info(f"Archivo .lrc guardado en: {target}")
-                except Exception as e:
-                    log.warning(f"No se pudo guardar en {target}: {e}")
-
-        # Si se solicitó explícitamente un output_lrc, verificar que NO sea la carpeta de música del usuario
-        if output_lrc:
-            audio_dir = os.path.abspath(os.path.dirname(audio_path)) if audio_path else ""
-            out_dir = os.path.abspath(os.path.dirname(output_lrc))
-            if out_dir and out_dir != audio_dir:
-                try:
-                    os.makedirs(out_dir, exist_ok=True)
-                    if force and os.path.exists(output_lrc):
-                        try:
-                            os.remove(output_lrc)
-                        except OSError:
-                            pass
-                    with open(output_lrc, "w", encoding="utf-8") as f:
-                        f.write(data.to_lrc())
-                    log.info(f"Archivo .lrc guardado en ruta explícita: {output_lrc}")
-                except Exception as e:
-                    log.warning(f"No se pudo guardar en {output_lrc}: {e}")
+        save_lrc_if_requested(data, output_lrc, audio_path, force=force)

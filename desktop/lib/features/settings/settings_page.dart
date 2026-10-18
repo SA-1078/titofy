@@ -6,7 +6,6 @@ import '../../core/services/library_service.dart';
 import '../../core/services/theme_service.dart';
 import '../../core/services/locale_service.dart';
 import '../../core/services/database_service.dart';
-import '../../shell/window_controls.dart';
 
 const String _appVersion = String.fromEnvironment('APP_VERSION', defaultValue: '1.0.0');
 
@@ -93,8 +92,6 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ],
                   ),
-                  const Spacer(),
-                  WindowControls(isDark: c.isDark),
                 ],
               ),
 

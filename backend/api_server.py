@@ -95,6 +95,9 @@ from server.schemas import (
     PostprocessRequest,
     ResolveLyricsRequest,
     PreloadModelRequest,
+    ExtractYouTubeRequest,
+    YouTubeStreamRequest,
+    YouTubeDownloadRequest,
 )
 from server.process import start_parent_watchdog, free_port_if_in_use
 from server.tasks import (
@@ -135,6 +138,15 @@ app.add_middleware(
 @app.post("/transcribe")
 async def transcribe(req: TranscribeRequest):
     """Inicia una transcripción en background. Retorna task_id para polling."""
+    if req.audio_path.startswith("youtube:"):
+        try:
+            from youtube.downloader import download_youtube_audio_track
+            dl_info = download_youtube_audio_track(video_id=req.audio_path)
+            if dl_info and dl_info.get("file_path") and os.path.exists(dl_info["file_path"]):
+                req.audio_path = dl_info["file_path"]
+        except Exception as e:
+            log.warning(f"Error auto-descargando audio de YouTube en transcribe: {e}")
+
     if not os.path.exists(req.audio_path):
         raise HTTPException(status_code=404, detail=f"Audio no encontrado: {req.audio_path}")
 
@@ -152,6 +164,15 @@ async def transcribe(req: TranscribeRequest):
 @app.post("/align")
 async def align(req: AlignRequest):
     """Inicia forced alignment en background."""
+    if req.audio_path.startswith("youtube:"):
+        try:
+            from youtube.downloader import download_youtube_audio_track
+            dl_info = download_youtube_audio_track(video_id=req.audio_path)
+            if dl_info and dl_info.get("file_path") and os.path.exists(dl_info["file_path"]):
+                req.audio_path = dl_info["file_path"]
+        except Exception as e:
+            log.warning(f"Error auto-descargando audio de YouTube en align: {e}")
+
     if not os.path.exists(req.audio_path):
         raise HTTPException(status_code=404, detail=f"Audio no encontrado: {req.audio_path}")
 
@@ -233,6 +254,60 @@ async def resolve_lyrics(req: ResolveLyricsRequest):
     except Exception as e:
         import traceback
         log.error(f"Error en /lyrics/resolve: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/youtube/playlist")
+async def extract_youtube_playlist(req: ExtractYouTubeRequest):
+    """
+    Extrae los metadatos de una playlist o vídeo de YouTube / YouTube Music
+    sin descargar ningún archivo de audio (modo metadatos primero).
+    """
+    from youtube.extractor import extract_youtube_metadata
+    try:
+        data = extract_youtube_metadata(req.url)
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Error al extraer playlist de YouTube: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/youtube/stream")
+async def get_youtube_stream(req: YouTubeStreamRequest):
+    """
+    Obtiene la URL directa de streaming de audio para reproducir vía media_kit.
+    """
+    from youtube.extractor import get_youtube_audio_stream_url
+    try:
+        data = get_youtube_audio_stream_url(req.video_id)
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Error al obtener stream de YouTube: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/youtube/download")
+async def download_youtube_track(req: YouTubeDownloadRequest):
+    """
+    Descarga el audio de una pista de YouTube en segundo plano a la carpeta local.
+    """
+    from youtube.extractor import download_youtube_audio_track
+    try:
+        data = download_youtube_audio_track(
+            video_id=req.video_id,
+            title=req.title,
+            artist=req.artist,
+            target_folder=req.target_folder,
+        )
+        return data
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        log.error(f"Error al descargar pista de YouTube: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

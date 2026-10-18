@@ -6,7 +6,9 @@ import '../../core/theme/colors.dart';
 import '../../core/services/api_service.dart';
 import '../../core/services/player_service.dart';
 import '../../core/services/lyrics_service.dart';
-import '../../shell/window_controls.dart';
+import '../../core/services/notification_service.dart';
+import '../../core/services/library_service.dart';
+import 'widgets/studio_header.dart';
 import 'widgets/studio_audio_card.dart';
 import 'widgets/studio_strategy_card.dart';
 import 'widgets/studio_control_card.dart';
@@ -20,7 +22,9 @@ class StudioPage extends StatefulWidget {
   State<StudioPage> createState() => _StudioPageState();
 }
 
-class _StudioPageState extends State<StudioPage> {
+class _StudioPageState extends State<StudioPage> with AutomaticKeepAliveClientMixin {
+  @override
+  bool get wantKeepAlive => true;
   String? _selectedFilePath;
   String _selectedModel = 'small';
   String _selectedLanguage = 'auto';
@@ -125,9 +129,51 @@ class _StudioPageState extends State<StudioPage> {
       return;
     }
 
+    // Si la pista proviene de YouTube, descargar automáticamente antes de procesar con Whisper
+    if (_selectedFilePath!.startsWith('youtube:')) {
+      setState(() {
+        _isProcessing = true;
+        _progressValue = 0.10;
+        _currentStatusText = 'Descargando audio de YouTube a tu biblioteca...';
+        _resultLines = [];
+      });
+
+      final lib = context.read<LibraryService>();
+      final targetFolder = lib.scannedFolder ?? '/home/santiago007/Música';
+      try {
+        final dlRes = await api.downloadYouTubeTrack(
+          videoId: _selectedFilePath!,
+          title: _titleCtrl.text.isNotEmpty ? _titleCtrl.text : null,
+          artist: _artistCtrl.text.isNotEmpty ? _artistCtrl.text : null,
+          targetFolder: targetFolder,
+        );
+        if (dlRes != null && dlRes['file_path'] != null) {
+          final localPath = dlRes['file_path'] as String;
+          _selectedFilePath = localPath;
+          lib.scanFolder(targetFolder);
+          try {
+            context.read<NotificationService>().add(
+              title: 'Descarga de YouTube completada',
+              message: '${dlRes['title'] ?? 'Pista'} guardada en $targetFolder',
+              type: NotificationType.download,
+              filePath: localPath,
+            );
+          } catch (_) {}
+        }
+      } catch (e) {
+        if (_selectedMode != 'online_only') {
+          setState(() {
+            _isProcessing = false;
+            _currentStatusText = 'Error descargando pista de YouTube: $e';
+          });
+          return;
+        }
+      }
+    }
+
     setState(() {
       _isProcessing = true;
-      _progressValue = 0.15;
+      _progressValue = 0.20;
       _currentStatusText = 'Conectando con motor de IA local...';
       _resultLines = [];
     });
@@ -198,40 +244,31 @@ class _StudioPageState extends State<StudioPage> {
         }
 
         if (res != null) {
-          final rawProv = res['provider']?.toString() ?? '';
-          final rawSrc = res['source']?.toString() ?? '';
-          String displaySource = 'Fuente 1';
-          if (rawSrc == 'online_aligned' ||
-              rawProv.contains('Alineada') ||
-              rawProv.contains('calibrado')) {
-            displaySource = rawProv.isNotEmpty ? rawProv : 'Fuente 1 · Alineada con Audio';
-          } else if (rawSrc == 'ai_generated' || rawProv.toLowerCase().contains('whisper')) {
-            displaySource = 'Whisper IA (Transcripción)';
-          } else if (rawProv.contains('Fuente 1') || rawProv.toLowerCase().contains('lrclib')) {
-            displaySource = 'Fuente 1';
-          } else if (rawProv.contains('Fuente 2') || rawProv.toLowerCase().contains('netease')) {
-            displaySource = 'Fuente 2';
-          } else if (rawProv.contains('Fuente 3') ||
-              rawProv.toLowerCase().contains('genius') ||
-              rawProv.toLowerCase().contains('lyrist')) {
-            displaySource = 'Fuente 3';
-          } else {
-            displaySource = rawProv.isNotEmpty ? rawProv : rawSrc;
-          }
-
+          final displaySource = _resolveDisplaySource(res);
           setState(() {
             _progressValue = 1.0;
             _resultLines = res?['lines'] as List? ?? [];
             _resultSource = displaySource;
-            _currentStatusText =
-                '¡Proceso completado! (${_resultLines.length} líneas generadas)';
+            _currentStatusText = '¡Proceso completado! (${_resultLines.length} líneas generadas)';
           });
+
+          final trackName = (_titleCtrl.text.isNotEmpty && _artistCtrl.text.isNotEmpty)
+              ? '${_artistCtrl.text} - ${_titleCtrl.text}'
+              : (_titleCtrl.text.isNotEmpty ? _titleCtrl.text : (_selectedFilePath?.split('/').last ?? 'Canción'));
+
+          try {
+            context.read<NotificationService>().add(
+              title: 'Sincronización IA completada',
+              message: '$trackName (${_resultLines.length} líneas generadas con $displaySource)',
+              type: NotificationType.lyrics,
+              filePath: _selectedFilePath,
+            );
+          } catch (_) {}
 
           if (!mounted) return;
           try {
             final player = context.read<PlayerService>();
-            if (player.currentTrack != null &&
-                player.currentTrack!.path == _selectedFilePath) {
+            if (player.currentTrack != null && player.currentTrack!.path == _selectedFilePath) {
               context.read<LyricsService>().applyResolvedResponse(res);
             }
           } catch (_) {}
@@ -240,8 +277,16 @@ class _StudioPageState extends State<StudioPage> {
         }
       }
     } catch (e) {
+      final cleanMsg = _humanizeErrorMessage(e);
+      try {
+        context.read<NotificationService>().add(
+          title: 'Error en proceso de IA',
+          message: cleanMsg,
+          type: NotificationType.error,
+          filePath: _selectedFilePath,
+        );
+      } catch (_) {}
       if (mounted) {
-        final cleanMsg = _humanizeErrorMessage(e);
         setState(() {
           _currentStatusText = 'Error: $cleanMsg';
           _progressValue = 0.0;
@@ -254,28 +299,37 @@ class _StudioPageState extends State<StudioPage> {
     }
   }
 
+  String _resolveDisplaySource(Map<String, dynamic> res) {
+    final p = res['provider']?.toString() ?? '';
+    final s = res['source']?.toString() ?? '';
+    if (s == 'online_aligned' || p.contains('Alineada') || p.contains('calibrado')) {
+      return p.isNotEmpty ? p : 'Fuente 1 · Alineada con Audio';
+    } else if (s == 'ai_generated' || p.toLowerCase().contains('whisper')) {
+      return 'Whisper IA (Transcripción)';
+    } else if (p.contains('Fuente 1') || p.toLowerCase().contains('lrclib')) {
+      return 'Fuente 1';
+    } else if (p.contains('Fuente 2') || p.toLowerCase().contains('netease')) {
+      return 'Fuente 2';
+    } else if (p.contains('Fuente 3') || p.toLowerCase().contains('genius') || p.toLowerCase().contains('lyrist')) {
+      return 'Fuente 3';
+    }
+    return p.isNotEmpty ? p : s;
+  }
+
   String _humanizeErrorMessage(dynamic error) {
     final str = error.toString().replaceFirst(RegExp(r'^Exception:\s*'), '');
     final lower = str.toLowerCase();
-
-    if (lower.contains('socketexception') ||
-        lower.contains('connection refused') ||
-        lower.contains('failed host lookup') ||
-        lower.contains('servidor local no detectado') ||
-        lower.contains('8642')) {
-      return 'No se pudo conectar con el motor local de IA (puerto 8642). Verifica que el backend esté ejecutándose.';
+    if (lower.contains('socketexception') || lower.contains('refused') || lower.contains('8642')) {
+      return 'No se pudo conectar con el motor local de IA (puerto 8642).';
     }
-    if (lower.contains('timeout') || lower.contains('timed out')) {
-      return 'La operación tardó demasiado tiempo en responder. Si estás transcribiendo un audio largo, intenta con un modelo más rápido (como "base").';
+    if (lower.contains('timeout')) {
+      return 'La operación tardó demasiado tiempo en responder. Prueba con un modelo más rápido (ej. "base").';
     }
-    if (lower.contains('cuda out of memory') || lower.contains('out of memory')) {
-      return 'La memoria de tu tarjeta gráfica (VRAM) se ha agotado. Selecciona un modelo más ligero (ej. base o small) o usa CPU.';
-    }
-    if (lower.contains('cuda') || lower.contains('cublas') || lower.contains('cudnn')) {
-      return 'Error de aceleración CUDA: $str. Puedes cambiar a CPU en la configuración si el problema persiste.';
+    if (lower.contains('out of memory')) {
+      return 'Memoria VRAM insuficiente. Selecciona un modelo más ligero o cambia a CPU.';
     }
     if (lower.contains('no se encontraron letras') || lower.contains('404')) {
-      return 'No se encontraron letras en línea para esta canción. Prueba con el modo Whisper IA Local.';
+      return 'No se encontraron letras en línea. Prueba con el modo IA Local.';
     }
     return str;
   }
@@ -297,6 +351,19 @@ class _StudioPageState extends State<StudioPage> {
         }
 
         if (st == 'done') {
+          final trackName = (_titleCtrl.text.isNotEmpty && _artistCtrl.text.isNotEmpty)
+              ? '${_artistCtrl.text} - ${_titleCtrl.text}'
+              : (_titleCtrl.text.isNotEmpty ? _titleCtrl.text : (_selectedFilePath?.split('/').last ?? 'Canción'));
+
+          try {
+            context.read<NotificationService>().add(
+              title: 'Alineación IA completada',
+              message: '$trackName: letras y audio sincronizados con éxito',
+              type: NotificationType.lyrics,
+              filePath: _selectedFilePath,
+            );
+          } catch (_) {}
+
           if (mounted) {
             setState(() {
               _progressValue = 1.0;
@@ -313,9 +380,8 @@ class _StudioPageState extends State<StudioPage> {
 
   @override
   Widget build(BuildContext context) {
+    super.build(context);
     final api = context.watch<ApiService>();
-    final c = context.colors;
-
     return Scaffold(
       backgroundColor: Colors.transparent,
       body: SingleChildScrollView(
@@ -324,96 +390,7 @@ class _StudioPageState extends State<StudioPage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // ── Cabecera Principal ──────────────────────────────────────────
-            Row(
-              children: [
-                Container(
-                  width: 44,
-                  height: 44,
-                  decoration: BoxDecoration(
-                    borderRadius: BorderRadius.circular(12),
-                    boxShadow: [
-                      BoxShadow(
-                        color: c.primary.withOpacity(0.35),
-                        blurRadius: 16,
-                      ),
-                    ],
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: Image.asset(
-                    'assets/images/logo.png',
-                    fit: BoxFit.cover,
-                  ),
-                ),
-                const SizedBox(width: 14),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      'Titofy',
-                      style: TextStyle(
-                        fontSize: 22,
-                        fontWeight: FontWeight.w800,
-                        color: c.textPrimary,
-                        letterSpacing: -0.4,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      'Transcripción y sincronización de audio',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: c.textSecondary,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-                const Spacer(),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: api.isOnline
-                        ? const Color(0xFF142C1E)
-                        : const Color(0xFF2C1E14),
-                    borderRadius: BorderRadius.circular(20),
-                    border: Border.all(
-                      color: api.isOnline
-                          ? const Color(0xFF22C55E).withOpacity(0.35)
-                          : const Color(0xFFF59E0B).withOpacity(0.35),
-                    ),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Container(
-                        width: 7,
-                        height: 7,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: api.isOnline
-                              ? const Color(0xFF22C55E)
-                              : const Color(0xFFF59E0B),
-                        ),
-                      ),
-                      const SizedBox(width: 7),
-                      Text(
-                        api.isOnline ? 'Motor disponible' : 'Motor desconectado',
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: api.isOnline
-                              ? const Color(0xFF4ADE80)
-                              : const Color(0xFFFBBF24),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(width: 14),
-                WindowControls(isDark: c.isDark),
-              ],
-            ),
+            StudioHeader(api: api),
 
             const SizedBox(height: 22),
 

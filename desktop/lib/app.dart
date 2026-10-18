@@ -8,6 +8,7 @@ import 'core/services/database_service.dart';
 import 'core/services/library_service.dart';
 import 'core/services/theme_service.dart';
 import 'core/services/locale_service.dart';
+import 'core/services/notification_service.dart';
 import 'shell/app_shell.dart';
 
 class TitofyApp extends StatelessWidget {
@@ -18,6 +19,7 @@ class TitofyApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(create: (_) => DatabaseService()),
+        ChangeNotifierProvider(create: (_) => NotificationService()),
         ChangeNotifierProxyProvider<DatabaseService, ThemeService>(
           create: (ctx) {
             final t = ThemeService();
@@ -45,16 +47,18 @@ class TitofyApp extends StatelessWidget {
           create: (ctx) => LyricsService(ctx.read<ApiService>()),
           update: (ctx, api, prev) => prev ?? LyricsService(api),
         ),
-        ChangeNotifierProxyProvider2<LyricsService, DatabaseService, PlayerService>(
+        ChangeNotifierProxyProvider3<LyricsService, DatabaseService, ApiService, PlayerService>(
           create: (ctx) {
             final p = PlayerService();
             p.attachLyricsService(ctx.read<LyricsService>());
             p.attachDatabaseService(ctx.read<DatabaseService>());
+            p.attachApiService(ctx.read<ApiService>());
             return p;
           },
-          update: (ctx, lyrics, db, p) {
+          update: (ctx, lyrics, db, api, p) {
             p?.attachLyricsService(lyrics);
             p?.attachDatabaseService(db);
+            p?.attachApiService(api);
             return p!;
           },
         ),

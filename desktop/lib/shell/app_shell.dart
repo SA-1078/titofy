@@ -10,10 +10,12 @@ import '../features/music/expanded_player_view.dart';
 import '../features/music/albums_page.dart';
 import '../features/music/favorites_page.dart';
 import '../features/music/history_page.dart';
+import '../features/music/all_tracks_page.dart';
 import '../features/music/playlist_detail_page.dart';
 import '../features/settings/settings_page.dart';
 import 'nav_rail.dart';
 import 'mini_player.dart';
+import 'app_top_bar.dart';
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -26,10 +28,31 @@ class _AppShellState extends State<AppShell> {
   int _selectedIndex = 0;
   int? _selectedPlaylistId;
 
+  late final List<Widget> _pages;
+
   @override
   void initState() {
     super.initState();
     HardwareKeyboard.instance.addHandler(_handleKeyEvent);
+    _pages = [
+      MusicPage(
+        onNavigate: (index) => setState(() {
+          _selectedIndex = index;
+          _selectedPlaylistId = null;
+        }),
+        onPlaylistSelected: (plId) => setState(() {
+          _selectedPlaylistId = plId;
+          _selectedIndex = -1;
+        }),
+      ),
+      const StudioPage(),
+      const ExpandedPlayerView(isEmbedded: true),
+      const AlbumsPage(),
+      const SettingsPage(),
+      const FavoritesPage(),
+      const HistoryPage(),
+      const AllTracksPage(),
+    ];
   }
 
   @override
@@ -41,13 +64,35 @@ class _AppShellState extends State<AppShell> {
   bool _handleKeyEvent(KeyEvent event) {
     if (event is! KeyDownEvent) return false;
 
-    // 1. Si hay un diálogo, modal o ventana abierta sobre la pantalla principal, NO interceptar
-    final route = ModalRoute.of(context);
-    if (route != null && !route.isCurrent) {
-      return false;
+    final player = context.read<PlayerService>();
+
+    // ── 1. TECLAS MULTIMEDIA DE HARDWARE (Siempre activas, incluso con modales o foco) ──
+    if (event.logicalKey == LogicalKeyboardKey.mediaPlayPause ||
+        event.logicalKey == LogicalKeyboardKey.mediaPlay ||
+        event.logicalKey == LogicalKeyboardKey.mediaPause) {
+      player.playPause();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.mediaTrackNext ||
+        event.logicalKey == LogicalKeyboardKey.mediaFastForward) {
+      player.next();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.mediaTrackPrevious ||
+        event.logicalKey == LogicalKeyboardKey.mediaRewind) {
+      player.previous();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.audioVolumeUp) {
+      player.changeVolume(0.05);
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.audioVolumeDown) {
+      player.changeVolume(-0.05);
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.audioVolumeMute) {
+      player.setVolume(player.volume > 0.0 ? 0.0 : 0.8);
+      return true;
     }
 
-    // 2. Si el foco actual está en un campo de texto o editor, permitir escribir normalmente
+    // ── 2. PROTECCIÓN DE EDICIÓN DE TEXTO ──
+    // Si el usuario escribe en un campo de texto (buscador, crear playlist, etc.), no interceptar teclas normales
     final primaryFocus = FocusManager.instance.primaryFocus;
     if (primaryFocus != null) {
       final debugLabel = primaryFocus.debugLabel?.toLowerCase() ?? '';
@@ -62,17 +107,26 @@ class _AppShellState extends State<AppShell> {
       }
     }
 
-    final player = context.read<PlayerService>();
+    // ── 3. TECLA ESCAPE (Cierra modales o regresa a la pantalla principal) ──
+    if (event.logicalKey == LogicalKeyboardKey.escape) {
+      if (Navigator.of(context).canPop()) {
+        Navigator.of(context).pop();
+        return true;
+      } else if (_selectedIndex != 0) {
+        setState(() => _selectedIndex = 0);
+        return true;
+      }
+      return false;
+    }
+
     if (player.currentTrack == null) return false;
 
+    final isCtrl = HardwareKeyboard.instance.isControlPressed;
+    final isShift = HardwareKeyboard.instance.isShiftPressed;
+
+    // ── 4. ATAJOS DE TECLADO GENERALES ──
     if (event.logicalKey == LogicalKeyboardKey.space) {
       player.playPause();
-      return true;
-    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
-      player.seekRelative(const Duration(seconds: -10));
-      return true;
-    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
-      player.seekRelative(const Duration(seconds: 10));
       return true;
     } else if (event.logicalKey == LogicalKeyboardKey.arrowUp) {
       player.changeVolume(0.05);
@@ -80,45 +134,37 @@ class _AppShellState extends State<AppShell> {
     } else if (event.logicalKey == LogicalKeyboardKey.arrowDown) {
       player.changeVolume(-0.05);
       return true;
-    } else if (event.logicalKey == LogicalKeyboardKey.escape) {
-      if (_selectedIndex == 2) {
-        setState(() => _selectedIndex = 0);
-        return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowLeft) {
+      if (isCtrl || isShift) {
+        player.previous();
+      } else {
+        player.seekRelative(const Duration(seconds: -10));
       }
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.arrowRight) {
+      if (isCtrl || isShift) {
+        player.next();
+      } else {
+        player.seekRelative(const Duration(seconds: 10));
+      }
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.keyN) {
+      player.next();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.keyP) {
+      player.previous();
+      return true;
+    } else if (event.logicalKey == LogicalKeyboardKey.keyM) {
+      player.setVolume(player.volume > 0.0 ? 0.0 : 0.8);
+      return true;
     }
+
     return false;
   }
 
   @override
   Widget build(BuildContext context) {
-    final List<Widget> pages = [
-      const MusicPage(),
-      const StudioPage(),
-      const ExpandedPlayerView(isEmbedded: true),
-      const AlbumsPage(),
-      const SettingsPage(),
-      const FavoritesPage(),
-      const HistoryPage(),
-    ];
-
     final c = context.colors;
-
-    Widget currentContent;
-    if (_selectedPlaylistId != null) {
-      currentContent = PlaylistDetailPage(
-        key: ValueKey('playlist_$_selectedPlaylistId'),
-        playlistId: _selectedPlaylistId!,
-        onBack: () => setState(() {
-          _selectedPlaylistId = null;
-          _selectedIndex = 0;
-        }),
-      );
-    } else {
-      currentContent = KeyedSubtree(
-        key: ValueKey(_selectedIndex),
-        child: pages[_selectedIndex.clamp(0, pages.length - 1)],
-      );
-    }
 
     return Scaffold(
       backgroundColor: c.background,
@@ -161,12 +207,54 @@ class _AppShellState extends State<AppShell> {
               Expanded(
                 child: Column(
                   children: [
+                    // ── Barra Superior Persistente en TODAS las pantallas ───
+                    AppTopBar(
+                      selectedIndex: _selectedIndex,
+                      selectedPlaylistId: _selectedPlaylistId,
+                      onBack: () {
+                        setState(() {
+                          _selectedPlaylistId = null;
+                          _selectedIndex = 0;
+                        });
+                      },
+                    ),
+
                     Expanded(
                       child: Container(
                         color: c.background,
-                        child: AnimatedSwitcher(
-                          duration: const Duration(milliseconds: 200),
-                          child: currentContent,
+                        child: Stack(
+                          children: [
+                            IndexedStack(
+                              index: _selectedIndex.clamp(0, _pages.length - 1),
+                              children: [
+                                for (var i = 0; i < _pages.length; i++)
+                                  // IndexedStack conserva sus hijos montados.
+                                  // Silenciar el ticker del reproductor cuando
+                                  // esa página no está visible evita trabajo
+                                  // continuo en segundo plano.
+                                  i == 2
+                                      ? TickerMode(
+                                          enabled: _selectedIndex == 2,
+                                          child: _pages[i],
+                                        )
+                                      : _pages[i],
+                              ],
+                            ),
+                            if (_selectedPlaylistId != null)
+                              Positioned.fill(
+                                child: Container(
+                                  color: c.background,
+                                  child: PlaylistDetailPage(
+                                    key: ValueKey('playlist_$_selectedPlaylistId'),
+                                    playlistId: _selectedPlaylistId!,
+                                    onBack: () => setState(() {
+                                      _selectedPlaylistId = null;
+                                      _selectedIndex = 0;
+                                    }),
+                                  ),
+                                ),
+                              ),
+                          ],
                         ),
                       ),
                     ),

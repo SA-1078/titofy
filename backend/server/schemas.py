@@ -73,3 +73,19 @@ class ResolveLyricsRequest(BaseModel):
 
 class PreloadModelRequest(BaseModel):
     model: Optional[str] = "small"
+
+
+class ExtractYouTubeRequest(BaseModel):
+    url: str
+
+
+class YouTubeStreamRequest(BaseModel):
+    video_id: str
+
+
+class YouTubeDownloadRequest(BaseModel):
+    video_id: str
+    title: Optional[str] = None
+    artist: Optional[str] = None
+    target_folder: Optional[str] = None
+

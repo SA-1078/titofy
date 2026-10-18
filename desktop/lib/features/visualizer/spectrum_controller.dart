@@ -2,11 +2,12 @@ import 'dart:math' as math;
 import 'package:flutter/material.dart';
 
 enum VisualizerMode {
-  spectrumOnly, // Modo 1: Espectro Neón Desktop Premium (Pantalla Completa 100%)
-  hybrid,       // Modo 2: Espectro Neón con Letra Flotante Activa
-  lyricsOnly,   // Modo 3: Karaoke Moderno
-  cliSpectrum,  // Modo 4: Espectro Terminal ASCII
-  cliClassic,   // Modo 5: Letras Consola
+  spectrumOnly, // Modo 1: Espectro Neón Desktop Premium (Notas / Frecuencias)
+  rhythm,       // Modo 2: Modo Ritmo (Barras Simétricas & Onda Radial 360°)
+  hybrid,       // Modo 3: Espectro Neón con Letra Flotante Activa
+  lyricsOnly,   // Modo 4: Karaoke Moderno
+  cliSpectrum,  // Modo 5: Espectro Terminal ASCII
+  cliClassic,   // Modo 6: Letras Consola
 }
 
 enum VisualizerTheme {
@@ -26,6 +27,7 @@ class SpectrumController extends ChangeNotifier {
   final List<double> _currentHeights = List.filled(numBars, 0.05);
   final List<double> _targetHeights = List.filled(numBars, 0.05);
   final List<double> _peaks = List.filled(numBars, 0.05);
+  final List<double> _diffusedHeights = List.filled(numBars, 0.05);
 
   double _beatEnergy = 0.0;
   double _bassPulse = 0.0;
@@ -166,7 +168,10 @@ class SpectrumController extends ChangeNotifier {
     }
 
     // ── 4. DIFUSIÓN LATERAL MODERADA (CONSERVA PICOS RÍTMICOS NÍTIDOS) ──────
-    final List<double> diffused = List<double>.from(_targetHeights);
+    // Reutilizar el buffer evita una asignación de 79 doubles en cada frame.
+    final diffused = _diffusedHeights;
+    diffused[0] = _targetHeights[0];
+    diffused[numBars - 1] = _targetHeights[numBars - 1];
     for (int i = 1; i < numBars - 1; i++) {
       diffused[i] = _targetHeights[i] * 0.60 +
           (_targetHeights[i - 1] + _targetHeights[i + 1]) * 0.20;
