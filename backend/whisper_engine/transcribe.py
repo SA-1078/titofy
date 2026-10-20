@@ -162,14 +162,15 @@ def transcribe_audio(
         _safe_print(f"  ⏳ Cargando modelo '{model_name}' en {(device or 'cpu').upper()}...")
 
     try:
-        model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+        from whisper_engine.loader import get_whisper_model
+        model, is_faster = get_whisper_model(model_name, device=device, compute_type=compute_type)
     except Exception as exc:
         exc_str = str(exc)
         if "CUDA out of memory" in exc_str or "out of memory" in exc_str.lower():
             log.warning(f"CUDA Out of Memory en GPU. Conmutando a CPU como fallback: {exc}")
             print_yellow("  ⚠️  VRAM agotada. Conmutando a CPU (int8)...")
             device = "cpu"
-            model, is_faster = load_whisper_model(model_name, device="cpu", compute_type="int8")
+            model, is_faster = get_whisper_model(model_name, device="cpu", compute_type="int8")
         else:
             raise exc
 

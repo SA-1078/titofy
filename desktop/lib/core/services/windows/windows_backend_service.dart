@@ -118,6 +118,45 @@ class WindowsBackendService {
     } catch (_) {}
   }
 
+  /// Resuelve la ruta del directorio backend en Windows buscando en instaladores y rutas locales
+  String? resolveBackendDirectory() {
+    if (!Platform.isWindows) return null;
+    final exeDir = File(Platform.resolvedExecutable).parent.path;
+    final currentDir = Directory.current.path;
+    final candidates = [
+      if (Platform.environment['LOCALAPPDATA'] != null)
+        '${Platform.environment['LOCALAPPDATA']}/Programs/Titofy/backend',
+      '$exeDir/backend',
+      exeDir,
+      '$exeDir/../backend',
+      '$currentDir/backend',
+      currentDir,
+      '$currentDir/../backend',
+      '$currentDir/../../backend',
+    ];
+
+    for (final c in candidates) {
+      final script = File('$c/api_server.py');
+      final exe = File('$c/api_server.exe');
+      if (script.existsSync() || exe.existsSync()) return Directory(c).absolute.path;
+    }
+    return null;
+  }
+
+  /// Resuelve el ejecutable de Python en Windows (.venv local o del sistema)
+  String resolvePythonExecutable(String backendDir) {
+    final envPython = Platform.environment['PYTHON'];
+    if (envPython != null && File(envPython).existsSync()) return envPython;
+
+    final venvBin = '$backendDir/.venv/Scripts/python.exe';
+    if (File(venvBin).existsSync()) return venvBin;
+
+    final venvAlt = '$backendDir/venv/Scripts/python.exe';
+    if (File(venvAlt).existsSync()) return venvAlt;
+
+    return 'python.exe';
+  }
+
   /// Inicia api_server.exe en Windows con aislamiento y watchdog de proceso padre
   Future<Process?> startBackendProcess(String backendDir, int parentPid) async {
     if (!Platform.isWindows) return null;
@@ -135,4 +174,56 @@ class WindowsBackendService {
       mode: ProcessStartMode.normal,
     );
   }
+
+  /// Inicia el backend completo en Windows (usando el ejecutable autónomo o Python local)
+  Future<Process?> startWindowsBackend({
+    required String backendDir,
+    required int parentPid,
+    required void Function(String line) onStdout,
+    required void Function(String line) onStderr,
+    required void Function(int exitCode) onExit,
+  }) async {
+    if (!Platform.isWindows) return null;
+
+    final exeServer = File('$backendDir/api_server.exe');
+    Process? process;
+
+    if (exeServer.existsSync()) {
+      debugPrint('[WindowsBackendService] Iniciando ejecutable autónomo api_server.exe...');
+      process = await startBackendProcess(backendDir, parentPid);
+      Future.delayed(
+        const Duration(milliseconds: 1500),
+        () => syncAndPatchMei(backendDir),
+      );
+    } else {
+      final pythonBin = resolvePythonExecutable(backendDir);
+      final serverScript = '$backendDir/api_server.py';
+      final venvDir = '$backendDir/.venv';
+      final venvBinDir = '$backendDir\\.venv\\Scripts';
+
+      debugPrint('[WindowsBackendService] Iniciando backend Python: $pythonBin (cwd: $backendDir)');
+
+      process = await Process.start(
+        pythonBin,
+        ['-u', serverScript, '--parent-pid', parentPid.toString()],
+        workingDirectory: backendDir,
+        environment: {
+          'VIRTUAL_ENV': venvDir,
+          'PATH': '$venvBinDir;${Platform.environment['PATH'] ?? ''}',
+          'PYTHONPATH': backendDir,
+          'PYTHONUNBUFFERED': '1',
+        },
+        mode: ProcessStartMode.normal,
+      );
+    }
+
+    if (process != null) {
+      process.stdout.transform(utf8.decoder).listen((data) => onStdout(data));
+      process.stderr.transform(utf8.decoder).listen((data) => onStderr(data));
+      process.exitCode.then((code) => onExit(code));
+    }
+
+    return process;
+  }
 }
+

@@ -9,6 +9,9 @@ import os
 import sys
 import shutil
 import subprocess
+import threading
+import gc
+import typing
 
 # Asegurar que la raíz de backend esté en sys.path
 backend_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -51,6 +54,9 @@ __all__ = [
     "get_best_available_model",
     "fix_loader",
     "load_whisper_model",
+    "get_whisper_model",
+    "release_whisper_model",
+    "cleanup_gpu_memory",
     "resolve_local_binary",
     "validate_audio_file",
 ]
@@ -168,6 +174,76 @@ def load_whisper_model(model_name: str, device: str, compute_type: str = "auto")
     raise RuntimeError(
         f"No se pudo cargar ningún modelo Whisper disponible en disco (último error: {last_error})"
     )
+
+
+# ── Caché Singleton de Modelo Activo en RAM/VRAM ─────────────────────────────
+_active_model: typing.Any = None
+_active_model_name: str | None = None
+_active_device: str | None = None
+_active_is_faster: bool = True
+_model_lock = threading.Lock()
+
+
+def cleanup_gpu_memory() -> None:
+    """Libera VRAM no utilizada y ejecuta garbage collection de forma segura."""
+    gc.collect()
+    try:
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
+
+def get_whisper_model(
+    model_name: str,
+    device: str | None = None,
+    compute_type: str = "auto",
+) -> tuple[typing.Any, bool]:
+    """
+    Carga o reutiliza el modelo Whisper activo garantizando como máximo 1 modelo en RAM/VRAM.
+    Si el modelo solicitado ya está cargado en el mismo dispositivo, lo reutiliza al instante (0 ms).
+    Si se solicita uno diferente, libera el previo y limpia la VRAM antes de cargar el nuevo.
+    """
+    global _active_model, _active_model_name, _active_device, _active_is_faster
+    with _model_lock:
+        if device is None:
+            device, _ = detect_device()
+
+        if (
+            _active_model is not None
+            and _active_model_name == model_name
+            and _active_device == device
+        ):
+            return _active_model, _active_is_faster
+
+        if _active_model is not None:
+            log.info(f"Liberando modelo previo '{_active_model_name}' en {_active_device}...")
+            _active_model = None
+            _active_model_name = None
+            _active_device = None
+            cleanup_gpu_memory()
+
+        model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+        _active_model = model
+        _active_model_name = model_name
+        _active_device = device
+        _active_is_faster = is_faster
+        return model, is_faster
+
+
+def release_whisper_model() -> None:
+    """Descarga el modelo activo para recuperar el 100% de la VRAM y RAM."""
+    global _active_model, _active_model_name, _active_device
+    with _model_lock:
+        if _active_model is not None:
+            log.info(f"Descargando modelo activo '{_active_model_name}' de memoria...")
+            _active_model = None
+            _active_model_name = None
+            _active_device = None
+            cleanup_gpu_memory()
+
 
 
 def resolve_local_binary(binary_name: str) -> str | None:

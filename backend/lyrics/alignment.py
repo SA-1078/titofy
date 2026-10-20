@@ -51,9 +51,8 @@ def calibrate_synced_lyrics(
     original_start: float = float(first_line.start)
 
     try:
-        from whisper_engine.loader import detect_device, load_whisper_model
-        device, _ = detect_device()
-        model, _ = load_whisper_model(model_name, device=device, compute_type="auto")
+        from whisper_engine.loader import get_whisper_model, cleanup_gpu_memory
+        model, _ = get_whisper_model(model_name)
 
         effective_lang = None if (not language or language == "auto") else language
         result = model.transcribe(audio_path, language=effective_lang, word_timestamps=True)

@@ -8,3 +8,5 @@
 library;
 
 export 'windows_backend_service.dart';
+export 'windows_audio_service.dart';
+export 'windows_performance.dart';

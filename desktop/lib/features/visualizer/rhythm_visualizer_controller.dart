@@ -124,9 +124,9 @@ class RhythmVisualizerController extends ChangeNotifier {
 
     if (audioProfile != null && playbackPositionMs != null) {
       final trackSec = playbackPositionMs / 1000.0;
-      _advanceAudioClock(trackSec);
-      _processAudioBeats(audioProfile, trackSec);
-      _updateAudioEnvelopes(audioProfile, d, trackSec);
+      _advanceAudioClock(d, trackSec);
+      _processAudioBeats(audioProfile, _internalTime);
+      _updateAudioEnvelopes(audioProfile, d, _internalTime);
     } else {
       _advanceClock(d, playbackPositionMs);
       _processSteps();
@@ -142,28 +142,73 @@ class RhythmVisualizerController extends ChangeNotifier {
     notifyListeners();
   }
 
-  void _advanceAudioClock(double trackSec) {
-    if (_lastAudioTime >= 0.0 && trackSec < _lastAudioTime - 0.25) {
+  void _advanceAudioClock(double d, double trackSec) {
+    if (_lastAudioTime < 0.0) {
+      _internalTime = trackSec;
+      _lastAudioTime = trackSec;
+      return;
+    }
+
+    // Avance suave continuo por delta de cuadro (animación 60-144 FPS sin congelamientos)
+    _internalTime += d;
+
+    final double drift = trackSec - _internalTime;
+    if (drift.abs() > 0.45) {
+      // Re-sincronización instantánea ante seek manual o salto de pista
+      _internalTime = trackSec;
       _kickT = _snareT = _hatT = -100.0;
       _kickVel = _snareVel = _hatVel = 0.0;
+      _lastAudioTime = trackSec;
       _audioBeatIndex = 0;
+    } else {
+      // Filtro pasa-bajos exponencial que converge sin sobresaltos ni tirones
+      _internalTime += drift * (1.0 - math.exp(-3.5 * d));
     }
-    _internalTime = trackSec;
   }
 
-  void _processAudioBeats(AudioBeatProfile profile, double trackSec) {
+  int _findBeatIndex(List<AudioBeatEvent> beats, double targetTime) {
+    var low = 0;
+    var high = beats.length;
+    while (low < high) {
+      final mid = (low + high) >> 1;
+      if (beats[mid].time < targetTime) {
+        low = mid + 1;
+      } else {
+        high = mid;
+      }
+    }
+    return low;
+  }
+
+  void _processAudioBeats(AudioBeatProfile profile, double toTime) {
     if (!identical(_activeAudioProfile, profile)) {
       _activeAudioProfile = profile;
       _audioBeatIndex = 0;
-      _lastAudioTime = -1.0;
+      _lastAudioTime = toTime;
     }
-    final from = _lastAudioTime < 0.0 ? trackSec - 0.06 : _lastAudioTime;
+    final fromTime = _lastAudioTime;
+    if (toTime < fromTime) {
+      // Salto hacia atrás en la pista
+      _audioBeatIndex = 0;
+      _lastAudioTime = toTime;
+      return;
+    }
+
+    // Búsqueda binaria rápida si el índice quedó desfasado
+    if (_audioBeatIndex >= profile.beats.length ||
+        (_audioBeatIndex > 0 &&
+            profile.beats[_audioBeatIndex - 1].time > fromTime)) {
+      _audioBeatIndex = _findBeatIndex(profile.beats, fromTime);
+    }
+
     while (_audioBeatIndex < profile.beats.length &&
-        profile.beats[_audioBeatIndex].time <= from) {
+        profile.beats[_audioBeatIndex].time < fromTime) {
       _audioBeatIndex++;
     }
+
+    // Disparar todos los golpes reales dentro del intervalo actual (fromTime, toTime]
     while (_audioBeatIndex < profile.beats.length &&
-        profile.beats[_audioBeatIndex].time <= trackSec) {
+        profile.beats[_audioBeatIndex].time <= toTime) {
       final event = profile.beats[_audioBeatIndex++];
       _kickT = event.time;
       _kickVel = event.strength;
@@ -171,7 +216,7 @@ class RhythmVisualizerController extends ChangeNotifier {
       _snareVel = event.strength * 0.72;
       _hatT = event.time;
       _hatVel = event.strength * 0.45;
-      if (event.strength >= 0.72 && _shockwaves.length < 5) {
+      if (event.strength >= 0.70 && _shockwaves.length < 5) {
         _shockwaves.add(
           ShockwaveRipple(
             radius: 80.0,
@@ -182,7 +227,7 @@ class RhythmVisualizerController extends ChangeNotifier {
         );
       }
     }
-    _lastAudioTime = trackSec;
+    _lastAudioTime = toTime;
   }
 
   void _updateAudioEnvelopes(AudioBeatProfile profile, double d, double time) {
@@ -215,27 +260,21 @@ class RhythmVisualizerController extends ChangeNotifier {
   }
 
   void _advanceClock(double d, int? posMs) {
-    _internalTime += d;
     if (posMs != null && posMs >= 0) {
       final double trackSec = posMs / 1000.0;
-      final double drift = trackSec - _internalTime;
-      if (drift.abs() > 0.6) {
+      if (_internalTime == 0.0 || (trackSec - _internalTime).abs() > 0.6) {
         _internalTime = trackSec;
-        _lastStep = (_internalTime / _stepLen).floor();
-        _kickT = _snareT = _hatT = -100.0;
       } else {
-        _internalTime += drift * (1.0 - math.exp(-2.5 * d));
+        _internalTime += d + (trackSec - _internalTime) * (1.0 - math.exp(-3.0 * d));
       }
+    } else {
+      _internalTime += d;
     }
   }
 
   void _processSteps() {
     final int step = (_internalTime / _stepLen).floor();
     if (step == _lastStep) return;
-    if (step < _lastStep) {
-      _lastStep = step;
-      return;
-    }
     _lastStep = step;
     _triggerStep(step);
   }

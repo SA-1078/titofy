@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
+import 'windows/windows_audio_service.dart';
 
 /// Evento percusivo detectado durante el análisis previo de una pista.
 class AudioBeatEvent {
@@ -85,12 +86,22 @@ class AudioBeatAnalysisService {
   static const _sampleRate = 2000;
   static const _frameSamples = 40; // 20 ms
 
-  Future<AudioBeatProfile?> analyze(String audioPath) async {
-    final file = File(audioPath);
-    if (!file.existsSync()) return null;
+  Future<AudioBeatProfile?> analyze(
+    String audioSource, {
+    String? cacheKeyId,
+  }) async {
+    final isRemote =
+        audioSource.startsWith('http://') || audioSource.startsWith('https://');
+    final keyId = cacheKeyId ?? audioSource;
 
-    final stat = await file.stat();
-    final cacheFile = await _cacheFile(audioPath, stat);
+    FileStat? stat;
+    if (!isRemote) {
+      final file = File(audioSource);
+      if (!file.existsSync()) return null;
+      stat = await file.stat();
+    }
+
+    final cacheFile = await _cacheFile(keyId, stat);
     try {
       if (await cacheFile.exists()) {
         return AudioBeatProfile.fromJson(
@@ -109,7 +120,7 @@ class AudioBeatAnalysisService {
         '-v',
         'error',
         '-i',
-        audioPath,
+        audioSource,
         '-vn',
         '-ac',
         '1',
@@ -142,25 +153,28 @@ class AudioBeatAnalysisService {
     }
   }
 
-  Future<File> _cacheFile(String audioPath, FileStat stat) async {
+  Future<File> _cacheFile(String keyId, FileStat? stat) async {
     final root = await getApplicationSupportDirectory();
-    final key = _stableHash(
-      '$audioPath|${stat.size}|${stat.modified.millisecondsSinceEpoch}',
-    );
+    final statPart = stat != null
+        ? '|${stat.size}|${stat.modified.millisecondsSinceEpoch}'
+        : '';
+    final key = _stableHash('$keyId$statPart');
     return File(p.join(root.path, 'audio_analysis', '$key.json'));
   }
 
   Future<String?> _resolveFfmpeg() async {
-    final names = Platform.isWindows ? ['ffmpeg.exe', 'ffmpeg'] : ['ffmpeg'];
+    if (Platform.isWindows) {
+      return WindowsAudioService.resolveFfmpeg();
+    }
+
+    // Entorno Linux (Ubuntu / POSIX):
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final candidates = <String>[
-      ...names.map((name) => p.join(exeDir, name)),
-      ...names.map((name) => p.join(exeDir, 'bin', name)),
-      ...names.map((name) => p.join(exeDir, 'backend', 'bin', name)),
-      ...names.map(
-        (name) => p.join(Directory.current.path, 'backend', 'bin', name),
-      ),
-      ...names.map((name) => p.join(Directory.current.path, 'bin', name)),
+      p.join(exeDir, 'ffmpeg'),
+      p.join(exeDir, 'bin', 'ffmpeg'),
+      p.join(exeDir, 'backend', 'bin', 'ffmpeg'),
+      p.join(Directory.current.path, 'backend', 'bin', 'ffmpeg'),
+      p.join(Directory.current.path, 'bin', 'ffmpeg'),
     ];
     for (final candidate in candidates) {
       if (File(candidate).existsSync()) return candidate;
@@ -169,10 +183,7 @@ class AudioBeatAnalysisService {
     final pathName = Platform.environment['FFMPEG_PATH'];
     if (pathName != null && File(pathName).existsSync()) return pathName;
     try {
-      final probe = await Process.run(
-        Platform.isWindows ? 'where' : 'which',
-        names,
-      );
+      final probe = await Process.run('which', ['ffmpeg']);
       if (probe.exitCode == 0) {
         final resolved = probe.stdout
             .toString()

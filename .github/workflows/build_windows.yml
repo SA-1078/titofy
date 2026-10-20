@@ -40,7 +40,7 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           python -m pip install --upgrade pip
-          pip install fastapi "uvicorn[standard]" requests mutagen rapidfuzz pyyaml pydantic pyinstaller faster-whisper "av==12.3.0" huggingface-hub nvidia-cublas-cu12 nvidia-cudnn-cu12
+          pip install -r backend/requirements.txt pyinstaller
           cd backend
           python -m PyInstaller --noconfirm --onefile --console --name api_server `
             --hidden-import uvicorn.logging `
@@ -60,6 +60,7 @@ jobs:
             --collect-all server `
             --collect-all cuda `
             --collect-all windows `
+            --collect-all youtube `
             --collect-all faster_whisper `
             --collect-all ctranslate2 `
             --collect-all nvidia.cublas `

@@ -11,6 +11,7 @@ import '../../core/services/lyrics_service.dart';
 import '../../core/services/database_service.dart';
 import '../visualizer/spectrum_controller.dart';
 import '../../shell/window_controls.dart';
+import '../../core/services/windows/windows_performance.dart';
 
 import 'expanded_player/expanded_playback_controls.dart';
 import 'expanded_player/expanded_spectrum_view.dart';
@@ -116,7 +117,8 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView>
 
     _ticker = createTicker((elapsed) {
       if (_lastTick != Duration.zero) {
-        final dt = (elapsed - _lastTick).inMicroseconds / 1000000.0;
+        final rawDt = (elapsed - _lastTick).inMicroseconds / 1000000.0;
+        final dt = WindowsPerformance.clampDelta(rawDt);
         final player = context.read<PlayerService>();
         final playing = player.isPlaying;
         // En pausa basta con un frame de decaimiento; después no hay trabajo
@@ -129,8 +131,9 @@ class _ExpandedPlayerViewState extends State<ExpandedPlayerView>
         if (modeUsesSpectrum && (playing || _lastPlaying)) {
           _spectrumController.updateFrame(
             playing,
-            dt.clamp(0.001, 0.05),
+            dt,
             playbackPositionMs: player.position.inMilliseconds,
+            audioProfile: player.audioBeatProfile,
           );
         }
         _lastPlaying = playing;

@@ -31,26 +31,14 @@ task_lock = threading.Lock()
 
 
 def get_model(model_name: str):
-    """Carga un modelo con cache manteniendo como máximo 1 modelo en memoria RAM."""
+    """Carga un modelo con cache manteniendo como máximo 1 modelo en memoria RAM/VRAM."""
     global model_cache
     with task_lock:
-        if model_name in model_cache:
-            return model_cache[model_name]
-
-        # Liberar modelo previo para evitar acumular 20 GB de memoria RAM
-        if model_cache:
-            log.info("Liberando modelo previo en memoria RAM...")
-            model_cache.clear()
-            import gc
-            gc.collect()
-
-        from whisper_engine.loader import load_whisper_model, detect_device
-        device, device_name = detect_device()
+        from whisper_engine.loader import get_whisper_model
         wcfg = cfg.get("whisper", {})
         compute_type = wcfg.get("compute_type", "auto")
-
-        log.info(f"Cargando modelo '{model_name}' en {device} (1 modelo activo en RAM)...")
-        model, is_faster = load_whisper_model(model_name, device=device, compute_type=compute_type)
+        model, _ = get_whisper_model(model_name, compute_type=compute_type)
+        model_cache.clear()
         model_cache[model_name] = model
         return model
 

@@ -10,6 +10,7 @@ import '../../visualizer/rhythm_visualizer_controller.dart';
 import '../../visualizer/rhythm_symmetric_painter.dart';
 import '../../visualizer/rhythm_radial_painter.dart';
 import 'rhythm_style_selector.dart';
+import '../../../core/services/windows/windows_performance.dart';
 
 /// Vista de Modo Ritmo interactiva con soporte para ambos estilos:
 /// 1. Barras Simétricas bombeando en bloque al beat
@@ -60,7 +61,8 @@ class _ExpandedRhythmViewState extends State<ExpandedRhythmView>
     _ticker = createTicker((elapsed) {
       if (!mounted) return;
       if (_lastTick != Duration.zero) {
-        final dt = (elapsed - _lastTick).inMicroseconds / 1000000.0;
+        final rawDt = (elapsed - _lastTick).inMicroseconds / 1000000.0;
+        final dt = WindowsPerformance.clampDelta(rawDt);
         final c = context.colors;
         final playing = widget.player.isPlaying;
         final trackPath = widget.player.currentTrack?.path;
@@ -71,7 +73,7 @@ class _ExpandedRhythmViewState extends State<ExpandedRhythmView>
         if (playing || _lastPlaying) {
           _rhythmController.updateFrame(
             playing,
-            dt.clamp(0.001, 0.05),
+            dt,
             playbackPositionMs: widget.player.position.inMilliseconds,
             accentColor: c.primary,
             audioProfile: widget.player.audioBeatProfile,
@@ -115,7 +117,10 @@ class _ExpandedRhythmViewState extends State<ExpandedRhythmView>
           shape: BoxShape.circle,
           gradient: c.primaryGradient,
           boxShadow: [
-            BoxShadow(color: c.primary.withOpacity(0.55), blurRadius: 30),
+            BoxShadow(
+              color: c.primary.withOpacity(0.40),
+              blurRadius: WindowsPerformance.shouldSimplifyDynamicEffects ? 12 : 28,
+            ),
           ],
         ),
         clipBehavior: Clip.antiAlias,

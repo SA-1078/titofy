@@ -189,6 +189,7 @@ class PlayerService extends ChangeNotifier {
 
         await _player.open(Media(streamUrl));
         await _player.play();
+        prepareAudioBeatProfile(directAudioSource: streamUrl);
       } catch (e) {
         if (_streamRequestId == currentReq) {
           _isResolvingStream = false;
@@ -222,26 +223,33 @@ class PlayerService extends ChangeNotifier {
 
     await _player.open(Media(track.path));
     await _player.play();
+    prepareAudioBeatProfile();
   }
 
-  /// Solicita el perfil acústico únicamente cuando un visualizador lo necesita.
-  /// La operación usa caché y nunca bloquea la reproducción.
-  Future<void> prepareAudioBeatProfile() async {
+  /// Solicita el perfil acústico de la pista en reproducción de manera asíncrona.
+  /// La operación usa caché en disco y nunca bloquea la reproducción.
+  Future<void> prepareAudioBeatProfile({String? directAudioSource}) async {
     final track = _currentTrack;
-    if (track == null || track.isRemote || !File(track.path).existsSync())
-      return;
+    if (track == null) return;
+    final source = directAudioSource ?? track.path;
+    if (!track.isRemote && !File(source).existsSync()) return;
     if (_analysisPath == track.path &&
-        (_audioBeatProfile != null || _analysisInProgress))
+        (_audioBeatProfile != null || _analysisInProgress)) {
       return;
+    }
     _analysisPath = track.path;
     _analysisInProgress = true;
     final requestId = ++_analysisRequestId;
     _audioBeatProfile = null;
-    await _prepareAudioProfile(track.path, requestId);
+    await _prepareAudioProfile(source, requestId, cacheKey: track.path);
   }
 
-  Future<void> _prepareAudioProfile(String path, int requestId) async {
-    final profile = await _audioAnalysis.analyze(path);
+  Future<void> _prepareAudioProfile(
+    String source,
+    int requestId, {
+    String? cacheKey,
+  }) async {
+    final profile = await _audioAnalysis.analyze(source, cacheKeyId: cacheKey);
     if (requestId != _analysisRequestId) return;
     _analysisInProgress = false;
     if (profile == null) return;

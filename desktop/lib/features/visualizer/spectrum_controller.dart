@@ -1,5 +1,6 @@
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
+import '../../core/services/audio_beat_analysis_service.dart';
 
 enum VisualizerMode {
   spectrumOnly, // Modo 1: Espectro Neón Desktop Premium (Notas / Frecuencias)
@@ -54,7 +55,12 @@ class SpectrumController extends ChangeNotifier {
   }
 
   /// Actualización frame a frame sincronizada y ultra reactiva
-  void updateFrame(bool isPlaying, double dt, {int? playbackPositionMs}) {
+  void updateFrame(
+    bool isPlaying,
+    double dt, {
+    int? playbackPositionMs,
+    AudioBeatProfile? audioProfile,
+  }) {
     final double clampedDt = math.min(dt, 0.033);
 
     if (!isPlaying) {
@@ -70,31 +76,37 @@ class SpectrumController extends ChangeNotifier {
       return;
     }
 
-    // ── 1. AVANCE DE TIEMPO SUAVE Y ULTRA FLUIDO (SIN JITTER NI TIRONES) ─────
-    _internalTime += clampedDt * 1.25;
+    // ── 1. AVANCE DE TIEMPO REAL CONTINUO (SIN FACTORES NI GLITCHES DE SALTO) ─
+    _internalTime += clampedDt;
 
     if (playbackPositionMs != null && playbackPositionMs > 0) {
-      final double trackSec = (playbackPositionMs / 1000.0) * 1.25;
+      final double trackSec = playbackPositionMs / 1000.0;
       final double diff = trackSec - _internalTime;
-      // Resincronizar únicamente si hubo un salto o seek manual mayor a 1.2 segundos
-      if (diff.abs() > 1.2) {
+      // Resincronizar suavemente si hubo seek manual o salto de pista
+      if (diff.abs() > 0.5) {
         _internalTime = trackSec;
+      } else {
+        _internalTime += diff * (1.0 - math.exp(-3.0 * clampedDt));
       }
     }
 
     final double t = _internalTime;
 
-    // ── 2. RITMO COMPLETO: BOMBO (TIEMPOS 1 Y 3) + TAROLA/CAJA (TIEMPOS 2 Y 4)
-    // Compás a ~136 BPM (0.441s por tiempo)
+    // ── 2. RITMO REAL: INTEGRACIÓN CON AUDIO PROFILE SI ESTÁ DISPONIBLE ───────
     final double beatPhase = (t / 0.441) % 1.0;
-
-    // A) Golpe de Bombo / Kick (Tiempos fuertes)
     final double kickDecay = math.exp(-beatPhase * 4.5);
-    final double kickPower = kickDecay > 0.12 ? kickDecay : 0.0;
+    double kickPower = kickDecay > 0.12 ? kickDecay : 0.0;
 
-    if (kickPower > 0.5) {
+    if (audioProfile != null) {
+      final double realLow = audioProfile.lowEnergyAt(t);
+      final double realEnergy = audioProfile.energyAt(t);
+      kickPower = math.max(kickPower * 0.35, realLow);
+      _beatEnergy = math.max(_beatEnergy, realEnergy);
+    }
+
+    if (kickPower > 0.45) {
       _bassPulse = kickPower;
-      _beatEnergy = 0.90;
+      _beatEnergy = math.max(_beatEnergy, 0.90);
     } else {
       _bassPulse = math.max(0.0, _bassPulse - 4.0 * clampedDt);
       _beatEnergy = math.max(0.0, _beatEnergy - 3.5 * clampedDt);

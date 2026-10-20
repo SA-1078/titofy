@@ -251,7 +251,8 @@ def align_lyrics(
 
     log.info(f"Cargando modelo '{model_name}' en {device} para alineación...")
     try:
-        model, _ = load_whisper_model(model_name, device=device, compute_type=compute_type)
+        from whisper_engine.loader import get_whisper_model
+        model, _ = get_whisper_model(model_name, device=device, compute_type=compute_type)
     except Exception as exc:
         log.error(f"Error al cargar modelo de alineación: {exc}")
         raise RuntimeError(f"Error al cargar modelo de alineación Whisper ({model_name}): {exc}")

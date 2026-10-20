@@ -12,6 +12,12 @@ class BackendProcessManager {
   String? get lastErrorMessage => _lastErrorMessage;
 
   String? resolveBackendDirectory() {
+    if (Platform.isWindows) {
+      return WindowsBackendService().resolveBackendDirectory();
+    }
+
+    // Rutas estándar para Linux (Ubuntu / POSIX)
+    final home = Platform.environment['HOME'] ?? '';
     final exeDir = File(Platform.resolvedExecutable).parent.path;
     final currentDir = Directory.current.path;
     final candidates = [
@@ -21,37 +27,33 @@ class BackendProcessManager {
       '$currentDir/backend',
       currentDir,
       '$currentDir/../backend',
-      '$currentDir/../../backend',
-      if (Platform.isWindows && Platform.environment['LOCALAPPDATA'] != null)
-        '${Platform.environment['LOCALAPPDATA']}/Programs/Titofy/backend',
-      '/home/santiago007/Documentos/titofy/backend',
-      '/home/santiago007/.local/share/titofy/backend',
+      if (home.isNotEmpty) '$home/.local/share/titofy/backend',
+      if (home.isNotEmpty) '$home/Documentos/titofy/backend',
     ];
 
     for (final c in candidates) {
       final script = File('$c/api_server.py');
-      final exe = File('$c/api_server.exe');
-      if (script.existsSync() || exe.existsSync()) return Directory(c).absolute.path;
+      if (script.existsSync()) return Directory(c).absolute.path;
     }
     return null;
   }
 
   String resolvePythonExecutable(String backendDir) {
+    if (Platform.isWindows) {
+      return WindowsBackendService().resolvePythonExecutable(backendDir);
+    }
+
+    // Linux / Ubuntu:
     final envPython = Platform.environment['PYTHON'];
     if (envPython != null && File(envPython).existsSync()) return envPython;
 
-    final isWin = Platform.isWindows;
-    final venvBin = isWin
-        ? '$backendDir/.venv/Scripts/python.exe'
-        : '$backendDir/.venv/bin/python';
+    final venvBin = '$backendDir/.venv/bin/python';
     if (File(venvBin).existsSync()) return venvBin;
 
-    final venvAlt = isWin
-        ? '$backendDir/venv/Scripts/python.exe'
-        : '$backendDir/venv/bin/python';
+    final venvAlt = '$backendDir/venv/bin/python';
     if (File(venvAlt).existsSync()) return venvAlt;
 
-    return isWin ? 'python' : 'python3';
+    return 'python3';
   }
 
   Future<void> freePort(int port) async {
@@ -79,38 +81,45 @@ class BackendProcessManager {
   }) async {
     await freePort(8642);
 
-    final isWin = Platform.isWindows;
-    final exeServer = File('$backendDir/api_server.exe');
-
-    if (isWin && exeServer.existsSync()) {
-      debugPrint('[BackendProcessManager] Iniciando ejecutable autónomo en Windows...');
-      _backendProcess = await WindowsBackendService().startBackendProcess(backendDir, pid);
-      Future.delayed(
-        const Duration(milliseconds: 1500),
-        () => syncLocalBackendCodeToTemp(backendDir),
-      );
-    } else {
-      final pythonBin = resolvePythonExecutable(backendDir);
-      final serverScript = '$backendDir/api_server.py';
-      final venvDir = '$backendDir/.venv';
-      final venvBinDir = isWin ? '$backendDir\\.venv\\Scripts' : '$venvDir/bin';
-      final pathSep = isWin ? ';' : ':';
-
-      debugPrint('[BackendProcessManager] Iniciando backend: $pythonBin $serverScript (cwd: $backendDir)');
-
-      _backendProcess = await Process.start(
-        pythonBin,
-        ['-u', serverScript, '--parent-pid', pid.toString()],
-        workingDirectory: backendDir,
-        environment: {
-          'VIRTUAL_ENV': venvDir,
-          'PATH': '$venvBinDir$pathSep${Platform.environment['PATH'] ?? ''}',
-          'PYTHONPATH': backendDir,
-          'PYTHONUNBUFFERED': '1',
+    if (Platform.isWindows) {
+      _backendProcess = await WindowsBackendService().startWindowsBackend(
+        backendDir: backendDir,
+        parentPid: pid,
+        onStdout: onStdout,
+        onStderr: (data) {
+          _lastErrorMessage = data.trim();
+          onStderr(data);
         },
-        mode: ProcessStartMode.normal,
+        onExit: (code) {
+          if (code != 0 && (_lastErrorMessage == null || _lastErrorMessage!.isEmpty)) {
+            _lastErrorMessage = 'El backend se cerró inesperadamente (código: $code)';
+          }
+          onExit(code);
+        },
       );
+      return _backendProcess;
     }
+
+    // ── Ejecución Nativa en Linux (Ubuntu / POSIX) ───────────────────────────
+    final pythonBin = resolvePythonExecutable(backendDir);
+    final serverScript = '$backendDir/api_server.py';
+    final venvDir = '$backendDir/.venv';
+    final venvBinDir = '$venvDir/bin';
+
+    debugPrint('[BackendProcessManager-Linux] Iniciando backend: $pythonBin $serverScript (cwd: $backendDir)');
+
+    _backendProcess = await Process.start(
+      pythonBin,
+      ['-u', serverScript, '--parent-pid', pid.toString()],
+      workingDirectory: backendDir,
+      environment: {
+        'VIRTUAL_ENV': venvDir,
+        'PATH': '$venvBinDir:${Platform.environment['PATH'] ?? ''}',
+        'PYTHONPATH': backendDir,
+        'PYTHONUNBUFFERED': '1',
+      },
+      mode: ProcessStartMode.normal,
+    );
 
     _backendProcess?.stdout.transform(utf8.decoder).listen((data) {
       onStdout(data);
